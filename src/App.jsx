@@ -53,8 +53,9 @@ const getTimeSince = (date) => {
   return 'Just now';
 };
 
-function WalletModal({ isOpen, onClose, onSelectWallet }) {
+function WalletModal({ isOpen, onClose, onSelectWallet, isMobileDevice }) {
   if (!isOpen) return null;
+
   return (
     <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
       <div className="bg-gray-900 rounded-2xl p-6 max-w-md w-full border border-gray-800">
@@ -63,17 +64,25 @@ function WalletModal({ isOpen, onClose, onSelectWallet }) {
           <button onClick={onClose} className="text-gray-400 hover:text-white"><X className="w-6 h-6" /></button>
         </div>
         <div className="space-y-3">
-          <button onClick={() => onSelectWallet('metamask')} className="w-full flex items-center gap-4 bg-gray-800 hover:bg-gray-700 p-4 rounded-xl transition">
-            <div className="w-12 h-12 bg-orange-500 rounded-xl flex items-center justify-center text-2xl">🦊</div>
-            <div className="text-left"><p className="font-semibold">MetaMask</p><p className="text-sm text-gray-400">Connect with MetaMask</p></div>
-          </button>
-          <button onClick={() => onSelectWallet('trustwallet')} className="w-full flex items-center gap-4 bg-gray-800 hover:bg-gray-700 p-4 rounded-xl transition">
-            <div className="w-12 h-12 bg-blue-600 rounded-xl flex items-center justify-center text-2xl">🛡️</div>
-            <div className="text-left"><p className="font-semibold">Trust Wallet</p><p className="text-sm text-gray-400">Connect with Trust Wallet</p></div>
-          </button>
+          {/* On mobile, only show WalletConnect. On desktop, show all options */}
+          {!isMobileDevice && (
+            <>
+              <button onClick={() => onSelectWallet('metamask')} className="w-full flex items-center gap-4 bg-gray-800 hover:bg-gray-700 p-4 rounded-xl transition">
+                <div className="w-12 h-12 bg-orange-500 rounded-xl flex items-center justify-center text-2xl">🦊</div>
+                <div className="text-left"><p className="font-semibold">MetaMask</p><p className="text-sm text-gray-400">Connect with MetaMask</p></div>
+              </button>
+              <button onClick={() => onSelectWallet('trustwallet')} className="w-full flex items-center gap-4 bg-gray-800 hover:bg-gray-700 p-4 rounded-xl transition">
+                <div className="w-12 h-12 bg-blue-600 rounded-xl flex items-center justify-center text-2xl">🛡️</div>
+                <div className="text-left"><p className="font-semibold">Trust Wallet</p><p className="text-sm text-gray-400">Connect with Trust Wallet</p></div>
+              </button>
+            </>
+          )}
           <button onClick={() => onSelectWallet('walletconnect')} className="w-full flex items-center gap-4 bg-gray-800 hover:bg-gray-700 p-4 rounded-xl transition">
             <div className="w-12 h-12 bg-blue-500 rounded-xl flex items-center justify-center text-2xl">🔗</div>
-            <div className="text-left"><p className="font-semibold">WalletConnect</p><p className="text-sm text-gray-400">Scan with mobile wallet</p></div>
+            <div className="text-left">
+              <p className="font-semibold">WalletConnect</p>
+              <p className="text-sm text-gray-400">{isMobileDevice ? 'Connect with your mobile wallet' : 'Scan with mobile wallet'}</p>
+            </div>
           </button>
         </div>
       </div>
@@ -206,60 +215,64 @@ export default function BabyBigFiveSpin() {
       // Find the actual MetaMask provider (handles multiple wallet extensions)
       let metamaskProvider = null;
 
-      // Debug logging for provider detection
-      console.log('MetaMask detection:', {
-        hasEthereum: !!window.ethereum,
-        hasProviders: !!window.ethereum?.providers,
-        providersLength: window.ethereum?.providers?.length,
-        providers: window.ethereum?.providers?.map(p => ({
-          isMetaMask: p.isMetaMask,
-          isTrust: p.isTrust,
-          isCoinbaseWallet: p.isCoinbaseWallet
-        })),
-        rootIsMetaMask: window.ethereum?.isMetaMask,
-        rootIsTrust: window.ethereum?.isTrust
-      });
+      // On mobile, check if we're inside MetaMask's in-app browser
+      // Otherwise fall back to WalletConnect
+      if (isMobile()) {
+        // Check if we're already inside MetaMask's in-app browser
+        if (window.ethereum?.isMetaMask && !window.ethereum?.isTrust) {
+          metamaskProvider = window.ethereum;
+          console.log('Mobile: Inside MetaMask in-app browser');
+        } else {
+          // On mobile browser without extension - use WalletConnect
+          console.log('Mobile: Using WalletConnect for MetaMask connection');
+          await connectWalletConnect();
+          return;
+        }
+      } else {
+        // Desktop: Debug logging for provider detection
+        console.log('MetaMask detection:', {
+          hasEthereum: !!window.ethereum,
+          hasProviders: !!window.ethereum?.providers,
+          providersLength: window.ethereum?.providers?.length,
+          providers: window.ethereum?.providers?.map(p => ({
+            isMetaMask: p.isMetaMask,
+            isTrust: p.isTrust,
+            isCoinbaseWallet: p.isCoinbaseWallet
+          })),
+          rootIsMetaMask: window.ethereum?.isMetaMask,
+          rootIsTrust: window.ethereum?.isTrust
+        });
 
-      // Check for multiple providers (when multiple wallet extensions are installed)
-      if (window.ethereum?.providers?.length) {
-        // Multiple wallets installed - find MetaMask specifically
-        // Look for provider that has isMetaMask but NOT isTrust
-        for (const p of window.ethereum.providers) {
-          if (p.isMetaMask && !p.isTrust) {
-            metamaskProvider = p;
-            console.log('Found MetaMask in providers array:', p);
-            break;
+        // Check for multiple providers (when multiple wallet extensions are installed)
+        if (window.ethereum?.providers?.length) {
+          // Multiple wallets installed - find MetaMask specifically
+          for (const p of window.ethereum.providers) {
+            if (p.isMetaMask && !p.isTrust) {
+              metamaskProvider = p;
+              console.log('Found MetaMask in providers array:', p);
+              break;
+            }
           }
         }
-      }
 
-      // If not found in providers array, check window.ethereum directly
-      // Only use it if it's MetaMask and NOT Trust Wallet
-      if (!metamaskProvider && window.ethereum) {
-        if (window.ethereum.isMetaMask && !window.ethereum.isTrust) {
-          metamaskProvider = window.ethereum;
-          console.log('Using window.ethereum as MetaMask provider');
+        // If not found in providers array, check window.ethereum directly
+        if (!metamaskProvider && window.ethereum) {
+          if (window.ethereum.isMetaMask && !window.ethereum.isTrust) {
+            metamaskProvider = window.ethereum;
+            console.log('Using window.ethereum as MetaMask provider');
+          }
         }
-      }
 
-      // If still not found, on mobile offer deep link
-      if (!metamaskProvider) {
-        console.log('MetaMask provider not found');
-        if (isMobile()) {
-          const metamaskDeepLink = `https://metamask.app.link/dapp/${window.location.host}${window.location.pathname}`;
-
-          if (confirm('MetaMask not detected. Would you like to open this page in the MetaMask app?')) {
-            window.location.href = metamaskDeepLink;
+        // If still not found on desktop, show error
+        if (!metamaskProvider) {
+          console.log('MetaMask provider not found');
+          if (window.ethereum) {
+            alert('MetaMask not detected. Another wallet is installed. Please use Trust Wallet or WalletConnect instead, or install MetaMask extension.');
+          } else {
+            alert('No wallet detected. Please install MetaMask or use WalletConnect.');
           }
           return;
         }
-        // On desktop, give helpful message
-        if (window.ethereum) {
-          alert('MetaMask not detected. Another wallet is installed. Please use Trust Wallet or WalletConnect instead, or install MetaMask extension.');
-        } else {
-          alert('No wallet detected. Please install MetaMask or use WalletConnect.');
-        }
-        return;
       }
 
       // Clear previous wallet state before connecting
@@ -288,31 +301,40 @@ export default function BabyBigFiveSpin() {
       // Find the actual Trust Wallet provider (handles multiple wallet extensions)
       let trustProvider = null;
 
-      // First check for dedicated Trust Wallet provider
-      if (window.trustwallet) {
-        trustProvider = window.trustwallet;
-      } else if (window.ethereum?.providers?.length) {
-        // Multiple wallets installed - find Trust Wallet specifically
-        trustProvider = window.ethereum.providers.find(p => p.isTrust);
-      } else if (window.ethereum?.isTrust) {
-        // Single wallet and it's Trust Wallet
-        trustProvider = window.ethereum;
-      }
-
-      if (!trustProvider) {
-        // On mobile, offer to open in Trust Wallet app
-        if (isMobile()) {
-          const trustWalletDeepLink = `https://link.trustwallet.com/open_url?coin_id=60&url=${encodeURIComponent(window.location.href)}`;
-
-          if (confirm('Trust Wallet not detected. Would you like to open this page in the Trust Wallet app?')) {
-            window.location.href = trustWalletDeepLink;
-            return;
-          }
+      // On mobile, check if we're inside Trust Wallet's in-app browser
+      // Otherwise fall back to WalletConnect
+      if (isMobile()) {
+        // Check if we're already inside Trust Wallet's in-app browser
+        if (window.trustwallet) {
+          trustProvider = window.trustwallet;
+          console.log('Mobile: Found window.trustwallet');
+        } else if (window.ethereum?.isTrust) {
+          trustProvider = window.ethereum;
+          console.log('Mobile: Inside Trust Wallet in-app browser');
+        } else {
+          // On mobile browser without extension - use WalletConnect
+          console.log('Mobile: Using WalletConnect for Trust Wallet connection');
+          await connectWalletConnect();
+          return;
         }
-        // Fall back to WalletConnect (Trust Wallet supports it)
-        alert('Trust Wallet not detected. Opening WalletConnect for mobile connection...');
-        await connectWalletConnect();
-        return;
+      } else {
+        // Desktop: Find Trust Wallet provider
+        if (window.trustwallet) {
+          trustProvider = window.trustwallet;
+        } else if (window.ethereum?.providers?.length) {
+          // Multiple wallets installed - find Trust Wallet specifically
+          trustProvider = window.ethereum.providers.find(p => p.isTrust);
+        } else if (window.ethereum?.isTrust) {
+          // Single wallet and it's Trust Wallet
+          trustProvider = window.ethereum;
+        }
+
+        if (!trustProvider) {
+          // Fall back to WalletConnect (Trust Wallet supports it)
+          alert('Trust Wallet not detected. Opening WalletConnect for mobile connection...');
+          await connectWalletConnect();
+          return;
+        }
       }
 
       // Clear previous wallet state before connecting
@@ -352,7 +374,14 @@ export default function BabyBigFiveSpin() {
           [BSC_CHAIN_ID]: BSC_RPC_URL,
           1: 'https://eth.llamarpc.com'
         },
-        showQrModal: true
+        showQrModal: true,
+        qrModalOptions: {
+          // Only feature MetaMask and Trust Wallet in the modal
+          featuredWalletIds: [
+            'c57ca95b47569778a828d19178114f4db188b89b763c899ba0be274e97267d96', // MetaMask
+            '4622a2b2d6af1c9844944291e5e7351a6aa24cd7b23099efac1b2fd875da31a0', // Trust Wallet
+          ]
+        }
       });
       await wc.enable();
       const web3Provider = new ethers.providers.Web3Provider(wc);
@@ -574,7 +603,7 @@ export default function BabyBigFiveSpin() {
 
   return (
     <div className="min-h-screen bg-black text-white p-4 md:p-8">
-      <WalletModal isOpen={showWalletModal} onClose={() => setShowWalletModal(false)} onSelectWallet={handleWalletSelect} />
+      <WalletModal isOpen={showWalletModal} onClose={() => setShowWalletModal(false)} onSelectWallet={handleWalletSelect} isMobileDevice={isMobile()} />
       <DepositModal isOpen={showDepositModal} onClose={() => setShowDepositModal(false)} onDeposit={handleDeposit} onWithdraw={handleWithdraw} balance={balance} depositedAmount={depositedAmount} needsApproval={needsApproval} spinCost={spinCost} />
 
       <div className="max-w-7xl mx-auto">
