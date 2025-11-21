@@ -368,6 +368,8 @@ export default function BabyBigFiveSpin() {
       if (WALLETCONNECT_PROJECT_ID === "YOUR_WALLETCONNECT_PROJECT_ID") { alert('Please set WALLETCONNECT_PROJECT_ID'); return; }
       const wc = await EthereumProvider.init({
         projectId: WALLETCONNECT_PROJECT_ID,
+        // BSC is required, but allow Ethereum as optional so more wallets show up
+        // We'll switch to BSC after connection
         chains: [BSC_CHAIN_ID],
         optionalChains: [1, BSC_CHAIN_ID],
         rpcMap: {
@@ -375,18 +377,50 @@ export default function BabyBigFiveSpin() {
           1: 'https://eth.llamarpc.com'
         },
         showQrModal: true,
-        qrModalOptions: {
-          // Only feature MetaMask and Trust Wallet in the modal
-          featuredWalletIds: [
-            'c57ca95b47569778a828d19178114f4db188b89b763c899ba0be274e97267d96', // MetaMask
-            '4622a2b2d6af1c9844944291e5e7351a6aa24cd7b23099efac1b2fd875da31a0', // Trust Wallet
-          ]
-        }
+        // Request methods needed for chain switching
+        methods: ['eth_sendTransaction', 'personal_sign', 'eth_signTypedData', 'wallet_switchEthereumChain', 'wallet_addEthereumChain'],
       });
       await wc.enable();
+
+      // Check and request BSC network switch if needed
+      const currentChainId = await wc.request({ method: 'eth_chainId' });
+      console.log('WalletConnect connected on chain:', currentChainId);
+
+      if (parseInt(currentChainId, 16) !== BSC_CHAIN_ID) {
+        console.log('Requesting switch to BSC...');
+        try {
+          await wc.request({
+            method: 'wallet_switchEthereumChain',
+            params: [{ chainId: `0x${BSC_CHAIN_ID.toString(16)}` }],
+          });
+        } catch (switchError) {
+          console.error('Failed to switch to BSC:', switchError);
+          // If switch fails, try adding the chain
+          if (switchError.code === 4902) {
+            await wc.request({
+              method: 'wallet_addEthereumChain',
+              params: [{
+                chainId: `0x${BSC_CHAIN_ID.toString(16)}`,
+                chainName: 'BNB Smart Chain',
+                nativeCurrency: { name: 'BNB', symbol: 'BNB', decimals: 18 },
+                rpcUrls: [BSC_RPC_URL],
+                blockExplorerUrls: ['https://bscscan.com']
+              }],
+            });
+          } else {
+            alert('Please switch to BNB Smart Chain (BSC) in your wallet to continue.');
+          }
+        }
+      }
+
       const web3Provider = new ethers.providers.Web3Provider(wc);
       const web3Signer = web3Provider.getSigner();
       const address = await web3Signer.getAddress();
+
+      // Debug: verify network after connection
+      const network = await web3Provider.getNetwork();
+      console.log('WalletConnect final network:', network);
+
       setWcProvider(wc); setProvider(web3Provider); setSigner(web3Signer); setAccount(address);
       setWalletType(WALLET_TYPES.WALLETCONNECT);
       localStorage.setItem(LAST_WALLET_KEY, WALLET_TYPES.WALLETCONNECT);
@@ -421,12 +455,30 @@ export default function BabyBigFiveSpin() {
 
   const loadData = async (token, gameContract, address, web3Provider = provider) => {
     try {
+      console.log('loadData called with:', { address, hasProvider: !!web3Provider });
+
+      // Check network before loading
+      if (web3Provider) {
+        const network = await web3Provider.getNetwork();
+        console.log('loadData network:', network);
+        if (network.chainId !== BSC_CHAIN_ID) {
+          console.warn('Wrong network detected in loadData:', network.chainId);
+        }
+      }
+
       // Fetch native BNB balance alongside token balance
       const [bal, allowance, nativeBalance] = await Promise.all([
-        token.balanceOf(address).catch(()=>ethers.BigNumber.from(0)),
-        token.allowance(address, CONTRACT_ADDRESS).catch(()=>ethers.BigNumber.from(0)),
-        web3Provider?.getBalance(address).catch(()=>ethers.BigNumber.from(0)) || Promise.resolve(ethers.BigNumber.from(0))
+        token.balanceOf(address).catch((e) => { console.error('balanceOf error:', e); return ethers.BigNumber.from(0); }),
+        token.allowance(address, CONTRACT_ADDRESS).catch((e) => { console.error('allowance error:', e); return ethers.BigNumber.from(0); }),
+        web3Provider?.getBalance(address).catch((e) => { console.error('getBalance error:', e); return ethers.BigNumber.from(0); }) || Promise.resolve(ethers.BigNumber.from(0))
       ]);
+
+      console.log('Balances fetched:', {
+        tokenBalance: ethers.utils.formatEther(bal),
+        bnbBalance: ethers.utils.formatEther(nativeBalance),
+        allowance: ethers.utils.formatEther(allowance)
+      });
+
       setBalance(ethers.utils.formatEther(bal));
       setBnbBalance(parseFloat(ethers.utils.formatEther(nativeBalance)).toFixed(4));
       setNeedsApproval(parseFloat(ethers.utils.formatEther(allowance)) < 10000);
