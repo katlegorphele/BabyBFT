@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { ethers } from 'ethers';
-import { Loader2, Wallet, TrendingUp, Trophy, RefreshCw, X, Plus, Minus, ExternalLink } from 'lucide-react';
+import { Loader2, Wallet, Trophy, RefreshCw, X, Plus, Minus, ExternalLink } from 'lucide-react';
 
 const CONTRACT_ADDRESS = "0xE1A557c7fec786E4404d0345B5D1a2ABeA66A4b0";
 const TOKEN_ADDRESS = "0xfB69e2d3d673A8DB9Fa74ffc036A8Cf641255769";
@@ -67,16 +67,17 @@ function WalletModal({ isOpen, onClose, onSelectWallet, isMobileDevice }) {
           {/* On mobile, only show WalletConnect. On desktop, show all options */}
           {!isMobileDevice && (
             <>
-              <button onClick={() => onSelectWallet('metamask')} className="w-full flex items-center gap-4 bg-gray-800 hover:bg-gray-700 p-4 rounded-xl transition">
-                <div className="w-12 h-12 bg-orange-500 rounded-xl flex items-center justify-center text-2xl">🦊</div>
-                <div className="text-left"><p className="font-semibold">MetaMask</p><p className="text-sm text-gray-400">Connect with MetaMask</p></div>
-              </button>
+              
               <button onClick={() => onSelectWallet('trustwallet')} className="w-full flex items-center gap-4 bg-gray-800 hover:bg-gray-700 p-4 rounded-xl transition">
                 <div className="w-12 h-12 bg-blue-600 rounded-xl flex items-center justify-center text-2xl">🛡️</div>
                 <div className="text-left"><p className="font-semibold">Trust Wallet</p><p className="text-sm text-gray-400">Connect with Trust Wallet</p></div>
               </button>
             </>
           )}
+          <button onClick={() => onSelectWallet('metamask')} className="w-full flex items-center gap-4 bg-gray-800 hover:bg-gray-700 p-4 rounded-xl transition">
+                <div className="w-12 h-12 bg-orange-500 rounded-xl flex items-center justify-center text-2xl">🦊</div>
+                <div className="text-left"><p className="font-semibold">MetaMask</p><p className="text-sm text-gray-400">Connect with MetaMask</p></div>
+              </button>
           <button onClick={() => onSelectWallet('walletconnect')} className="w-full flex items-center gap-4 bg-gray-800 hover:bg-gray-700 p-4 rounded-xl transition">
             <div className="w-12 h-12 bg-blue-500 rounded-xl flex items-center justify-center text-2xl">🔗</div>
             <div className="text-left">
@@ -218,38 +219,18 @@ export default function BabyBigFiveSpin() {
       // On mobile, check if we're inside MetaMask's in-app browser
       // Otherwise fall back to WalletConnect
       if (isMobile()) {
-        // Check if we're already inside MetaMask's in-app browser
         if (window.ethereum?.isMetaMask && !window.ethereum?.isTrust) {
           metamaskProvider = window.ethereum;
-          console.log('Mobile: Inside MetaMask in-app browser');
         } else {
-          // On mobile browser without extension - use WalletConnect
-          console.log('Mobile: Using WalletConnect for MetaMask connection');
           await connectWalletConnect();
           return;
         }
       } else {
-        // Desktop: Debug logging for provider detection
-        console.log('MetaMask detection:', {
-          hasEthereum: !!window.ethereum,
-          hasProviders: !!window.ethereum?.providers,
-          providersLength: window.ethereum?.providers?.length,
-          providers: window.ethereum?.providers?.map(p => ({
-            isMetaMask: p.isMetaMask,
-            isTrust: p.isTrust,
-            isCoinbaseWallet: p.isCoinbaseWallet
-          })),
-          rootIsMetaMask: window.ethereum?.isMetaMask,
-          rootIsTrust: window.ethereum?.isTrust
-        });
-
         // Check for multiple providers (when multiple wallet extensions are installed)
         if (window.ethereum?.providers?.length) {
-          // Multiple wallets installed - find MetaMask specifically
           for (const p of window.ethereum.providers) {
             if (p.isMetaMask && !p.isTrust) {
               metamaskProvider = p;
-              console.log('Found MetaMask in providers array:', p);
               break;
             }
           }
@@ -259,13 +240,11 @@ export default function BabyBigFiveSpin() {
         if (!metamaskProvider && window.ethereum) {
           if (window.ethereum.isMetaMask && !window.ethereum.isTrust) {
             metamaskProvider = window.ethereum;
-            console.log('Using window.ethereum as MetaMask provider');
           }
         }
 
         // If still not found on desktop, show error
         if (!metamaskProvider) {
-          console.log('MetaMask provider not found');
           if (window.ethereum) {
             alert('MetaMask not detected. Another wallet is installed. Please use Trust Wallet or WalletConnect instead, or install MetaMask extension.');
           } else {
@@ -304,16 +283,11 @@ export default function BabyBigFiveSpin() {
       // On mobile, check if we're inside Trust Wallet's in-app browser
       // Otherwise fall back to WalletConnect
       if (isMobile()) {
-        // Check if we're already inside Trust Wallet's in-app browser
         if (window.trustwallet) {
           trustProvider = window.trustwallet;
-          console.log('Mobile: Found window.trustwallet');
         } else if (window.ethereum?.isTrust) {
           trustProvider = window.ethereum;
-          console.log('Mobile: Inside Trust Wallet in-app browser');
         } else {
-          // On mobile browser without extension - use WalletConnect
-          console.log('Mobile: Using WalletConnect for Trust Wallet connection');
           await connectWalletConnect();
           return;
         }
@@ -368,8 +342,6 @@ export default function BabyBigFiveSpin() {
       if (WALLETCONNECT_PROJECT_ID === "YOUR_WALLETCONNECT_PROJECT_ID") { alert('Please set WALLETCONNECT_PROJECT_ID'); return; }
       const wc = await EthereumProvider.init({
         projectId: WALLETCONNECT_PROJECT_ID,
-        // BSC is required, but allow Ethereum as optional so more wallets show up
-        // We'll switch to BSC after connection
         chains: [BSC_CHAIN_ID],
         optionalChains: [1, BSC_CHAIN_ID],
         rpcMap: {
@@ -377,25 +349,20 @@ export default function BabyBigFiveSpin() {
           1: 'https://eth.llamarpc.com'
         },
         showQrModal: true,
-        // Request methods needed for chain switching
         methods: ['eth_sendTransaction', 'personal_sign', 'eth_signTypedData', 'wallet_switchEthereumChain', 'wallet_addEthereumChain'],
       });
       await wc.enable();
 
       // Check and request BSC network switch if needed
       const currentChainId = await wc.request({ method: 'eth_chainId' });
-      console.log('WalletConnect connected on chain:', currentChainId);
 
       if (parseInt(currentChainId, 16) !== BSC_CHAIN_ID) {
-        console.log('Requesting switch to BSC...');
         try {
           await wc.request({
             method: 'wallet_switchEthereumChain',
             params: [{ chainId: `0x${BSC_CHAIN_ID.toString(16)}` }],
           });
         } catch (switchError) {
-          console.error('Failed to switch to BSC:', switchError);
-          // If switch fails, try adding the chain
           if (switchError.code === 4902) {
             await wc.request({
               method: 'wallet_addEthereumChain',
@@ -413,13 +380,10 @@ export default function BabyBigFiveSpin() {
         }
       }
 
-      const web3Provider = new ethers.providers.Web3Provider(wc);
+      // Create provider after ensuring BSC chain - use 'any' network to handle chain switches
+      const web3Provider = new ethers.providers.Web3Provider(wc, 'any');
       const web3Signer = web3Provider.getSigner();
       const address = await web3Signer.getAddress();
-
-      // Debug: verify network after connection
-      const network = await web3Provider.getNetwork();
-      console.log('WalletConnect final network:', network);
 
       setWcProvider(wc); setProvider(web3Provider); setSigner(web3Signer); setAccount(address);
       setWalletType(WALLET_TYPES.WALLETCONNECT);
@@ -455,29 +419,12 @@ export default function BabyBigFiveSpin() {
 
   const loadData = async (token, gameContract, address, web3Provider = provider) => {
     try {
-      console.log('loadData called with:', { address, hasProvider: !!web3Provider });
-
-      // Check network before loading
-      if (web3Provider) {
-        const network = await web3Provider.getNetwork();
-        console.log('loadData network:', network);
-        if (network.chainId !== BSC_CHAIN_ID) {
-          console.warn('Wrong network detected in loadData:', network.chainId);
-        }
-      }
-
       // Fetch native BNB balance alongside token balance
       const [bal, allowance, nativeBalance] = await Promise.all([
-        token.balanceOf(address).catch((e) => { console.error('balanceOf error:', e); return ethers.BigNumber.from(0); }),
-        token.allowance(address, CONTRACT_ADDRESS).catch((e) => { console.error('allowance error:', e); return ethers.BigNumber.from(0); }),
-        web3Provider?.getBalance(address).catch((e) => { console.error('getBalance error:', e); return ethers.BigNumber.from(0); }) || Promise.resolve(ethers.BigNumber.from(0))
+        token.balanceOf(address).catch(() => ethers.BigNumber.from(0)),
+        token.allowance(address, CONTRACT_ADDRESS).catch(() => ethers.BigNumber.from(0)),
+        web3Provider?.getBalance(address).catch(() => ethers.BigNumber.from(0)) || Promise.resolve(ethers.BigNumber.from(0))
       ]);
-
-      console.log('Balances fetched:', {
-        tokenBalance: ethers.utils.formatEther(bal),
-        bnbBalance: ethers.utils.formatEther(nativeBalance),
-        allowance: ethers.utils.formatEther(allowance)
-      });
 
       setBalance(ethers.utils.formatEther(bal));
       setBnbBalance(parseFloat(ethers.utils.formatEther(nativeBalance)).toFixed(4));
@@ -547,10 +494,46 @@ export default function BabyBigFiveSpin() {
               await connectTrustWallet();
             }
           }
+        } else if (lastWallet === WALLET_TYPES.WALLETCONNECT) {
+          // Try to restore WalletConnect session
+          const EthereumProvider = (await import('@walletconnect/ethereum-provider')).default;
+          const wc = await EthereumProvider.init({
+            projectId: WALLETCONNECT_PROJECT_ID,
+            chains: [BSC_CHAIN_ID],
+            optionalChains: [1, BSC_CHAIN_ID],
+            rpcMap: {
+              [BSC_CHAIN_ID]: BSC_RPC_URL,
+              1: 'https://eth.llamarpc.com'
+            },
+            showQrModal: false, // Don't show modal on auto-reconnect
+            methods: ['eth_sendTransaction', 'personal_sign', 'eth_signTypedData', 'wallet_switchEthereumChain', 'wallet_addEthereumChain'],
+          });
+
+          // Check if there's an existing session
+          if (wc.session) {
+            const web3Provider = new ethers.providers.Web3Provider(wc, 'any');
+            const web3Signer = web3Provider.getSigner();
+            const address = await web3Signer.getAddress();
+
+            setWcProvider(wc);
+            setProvider(web3Provider);
+            setSigner(web3Signer);
+            setAccount(address);
+            setWalletType(WALLET_TYPES.WALLETCONNECT);
+
+            const gameContract = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, web3Signer);
+            const token = new ethers.Contract(TOKEN_ADDRESS, TOKEN_ABI, web3Signer);
+            setContract(gameContract);
+            setTokenContract(token);
+
+            await loadData(token, gameContract, address, web3Provider);
+
+            wc.on('disconnect', disconnectWallet);
+          } else {
+            localStorage.removeItem(LAST_WALLET_KEY);
+          }
         }
-        // Note: WalletConnect requires user interaction for reconnect, so we skip auto-reconnect for it
-      } catch (error) {
-        console.error('Auto-reconnect failed:', error);
+      } catch {
         localStorage.removeItem(LAST_WALLET_KEY);
       }
     };
@@ -662,7 +645,7 @@ export default function BabyBigFiveSpin() {
         {/* Header */}
         <div className="flex items-center justify-between mb-6 flex-wrap gap-4">
           <div className="flex items-center gap-3">
-            <div className="w-12 h-12 bg-orange-500 rounded-xl flex items-center justify-center"><TrendingUp className="w-7 h-7" /></div>
+            <img src="/BBFT_LOGO.jpg" alt="BBFT Logo" className="w-12 h-12 rounded-xl object-cover" />
             <div><h1 className="text-2xl font-bold">Baby Big Five Spin</h1><p className="text-sm text-gray-400">Win BBFT Tokens</p></div>
           </div>
           {!account ? (
