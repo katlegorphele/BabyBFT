@@ -5,6 +5,16 @@ import { Loader2, Wallet, TrendingUp, Trophy, RefreshCw, X, Plus, Minus, Externa
 const CONTRACT_ADDRESS = "0xE1A557c7fec786E4404d0345B5D1a2ABeA66A4b0";
 const TOKEN_ADDRESS = "0xfB69e2d3d673A8DB9Fa74ffc036A8Cf641255769";
 const WALLETCONNECT_PROJECT_ID = "905f16b4b770b18620f2739ed4757d0c";
+const BSC_CHAIN_ID = 56;
+const BSC_RPC_URL = "https://bsc-dataseed.binance.org/";
+
+// Wallet type constants for persistence
+const WALLET_TYPES = {
+  METAMASK: 'metamask',
+  TRUST_WALLET: 'trustwallet',
+  WALLETCONNECT: 'walletconnect'
+};
+const LAST_WALLET_KEY = 'bbft_last_wallet';
 
 
 const BUY_TOKEN_URL = `https://pancakeswap.finance/swap?inputCurrency=${TOKEN_ADDRESS}`;
@@ -56,6 +66,10 @@ function WalletModal({ isOpen, onClose, onSelectWallet }) {
           <button onClick={() => onSelectWallet('metamask')} className="w-full flex items-center gap-4 bg-gray-800 hover:bg-gray-700 p-4 rounded-xl transition">
             <div className="w-12 h-12 bg-orange-500 rounded-xl flex items-center justify-center text-2xl">🦊</div>
             <div className="text-left"><p className="font-semibold">MetaMask</p><p className="text-sm text-gray-400">Connect with MetaMask</p></div>
+          </button>
+          <button onClick={() => onSelectWallet('trustwallet')} className="w-full flex items-center gap-4 bg-gray-800 hover:bg-gray-700 p-4 rounded-xl transition">
+            <div className="w-12 h-12 bg-blue-600 rounded-xl flex items-center justify-center text-2xl">🛡️</div>
+            <div className="text-left"><p className="font-semibold">Trust Wallet</p><p className="text-sm text-gray-400">Connect with Trust Wallet</p></div>
           </button>
           <button onClick={() => onSelectWallet('walletconnect')} className="w-full flex items-center gap-4 bg-gray-800 hover:bg-gray-700 p-4 rounded-xl transition">
             <div className="w-12 h-12 bg-blue-500 rounded-xl flex items-center justify-center text-2xl">🔗</div>
@@ -125,6 +139,8 @@ export default function BabyBigFiveSpin() {
   const [tokenContract, setTokenContract] = useState(null);
   const [wcProvider, setWcProvider] = useState(null);
   const [balance, setBalance] = useState('0');
+  const [bnbBalance, setBnbBalance] = useState('0');
+  const [walletType, setWalletType] = useState(null);
   const [depositedAmount, setDepositedAmount] = useState('0');
   const [contractBalance, setContractBalance] = useState('0');
   const [spinCost, setSpinCost] = useState('2000');
@@ -138,48 +154,252 @@ export default function BabyBigFiveSpin() {
   const [showWalletModal, setShowWalletModal] = useState(false);
   const [showDepositModal, setShowDepositModal] = useState(false);
 
+  // Helper to detect mobile device
+  const isMobile = () => {
+    return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+  };
+
+  // Helper to reset wallet state before connecting a new wallet
+  const resetWalletState = () => {
+    wcProvider?.disconnect();
+    setWcProvider(null);
+    setProvider(null);
+    setSigner(null);
+    setAccount('');
+    setContract(null);
+    setTokenContract(null);
+    setBnbBalance('0');
+    setBalance('0');
+    setDepositedAmount('0');
+    setPlayerInfo({totalSpinsAllowance:0,availableSpins:0,totalSpinsUsed:0,totalWinnings:'0'});
+    setNeedsApproval(true);
+    setWalletType(null);
+  };
+
+  // Helper to switch to BSC during wallet connection
+  const switchToBsc = async (ethereumProvider) => {
+    try {
+      await ethereumProvider.request({
+        method: 'wallet_switchEthereumChain',
+        params: [{ chainId: `0x${BSC_CHAIN_ID.toString(16)}` }],
+      });
+    } catch (switchError) {
+      if (switchError.code === 4902) {
+        await ethereumProvider.request({
+          method: 'wallet_addEthereumChain',
+          params: [{
+            chainId: `0x${BSC_CHAIN_ID.toString(16)}`,
+            chainName: 'BNB Smart Chain',
+            nativeCurrency: { name: 'BNB', symbol: 'BNB', decimals: 18 },
+            rpcUrls: [BSC_RPC_URL],
+            blockExplorerUrls: ['https://bscscan.com']
+          }],
+        });
+      } else {
+        throw switchError;
+      }
+    }
+  };
+
   const connectMetaMask = async () => {
     try {
-      if (typeof window.ethereum === 'undefined') { alert('Please install MetaMask!'); return; }
-      const web3Provider = new ethers.providers.Web3Provider(window.ethereum);
+      // Find the actual MetaMask provider (handles multiple wallet extensions)
+      let metamaskProvider = null;
+
+      // Debug logging for provider detection
+      console.log('MetaMask detection:', {
+        hasEthereum: !!window.ethereum,
+        hasProviders: !!window.ethereum?.providers,
+        providersLength: window.ethereum?.providers?.length,
+        providers: window.ethereum?.providers?.map(p => ({
+          isMetaMask: p.isMetaMask,
+          isTrust: p.isTrust,
+          isCoinbaseWallet: p.isCoinbaseWallet
+        })),
+        rootIsMetaMask: window.ethereum?.isMetaMask,
+        rootIsTrust: window.ethereum?.isTrust
+      });
+
+      // Check for multiple providers (when multiple wallet extensions are installed)
+      if (window.ethereum?.providers?.length) {
+        // Multiple wallets installed - find MetaMask specifically
+        // Look for provider that has isMetaMask but NOT isTrust
+        for (const p of window.ethereum.providers) {
+          if (p.isMetaMask && !p.isTrust) {
+            metamaskProvider = p;
+            console.log('Found MetaMask in providers array:', p);
+            break;
+          }
+        }
+      }
+
+      // If not found in providers array, check window.ethereum directly
+      // Only use it if it's MetaMask and NOT Trust Wallet
+      if (!metamaskProvider && window.ethereum) {
+        if (window.ethereum.isMetaMask && !window.ethereum.isTrust) {
+          metamaskProvider = window.ethereum;
+          console.log('Using window.ethereum as MetaMask provider');
+        }
+      }
+
+      // If still not found, on mobile offer deep link
+      if (!metamaskProvider) {
+        console.log('MetaMask provider not found');
+        if (isMobile()) {
+          const metamaskDeepLink = `https://metamask.app.link/dapp/${window.location.host}${window.location.pathname}`;
+
+          if (confirm('MetaMask not detected. Would you like to open this page in the MetaMask app?')) {
+            window.location.href = metamaskDeepLink;
+          }
+          return;
+        }
+        // On desktop, give helpful message
+        if (window.ethereum) {
+          alert('MetaMask not detected. Another wallet is installed. Please use Trust Wallet or WalletConnect instead, or install MetaMask extension.');
+        } else {
+          alert('No wallet detected. Please install MetaMask or use WalletConnect.');
+        }
+        return;
+      }
+
+      // Clear previous wallet state before connecting
+      resetWalletState();
+
+      // Switch to BSC first
+      await switchToBsc(metamaskProvider);
+
+      const web3Provider = new ethers.providers.Web3Provider(metamaskProvider);
       await web3Provider.send("eth_requestAccounts", []);
       const web3Signer = web3Provider.getSigner();
       const address = await web3Signer.getAddress();
       setProvider(web3Provider); setSigner(web3Signer); setAccount(address);
+      setWalletType(WALLET_TYPES.METAMASK);
+      localStorage.setItem(LAST_WALLET_KEY, WALLET_TYPES.METAMASK);
       const gameContract = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, web3Signer);
       const token = new ethers.Contract(TOKEN_ADDRESS, TOKEN_ABI, web3Signer);
       setContract(gameContract); setTokenContract(token);
-      await loadData(token, gameContract, address);
+      await loadData(token, gameContract, address, web3Provider);
       setShowWalletModal(false);
     } catch (error) { console.error('Error:', error); alert('Failed to connect: ' + error.message); }
   };
 
+  const connectTrustWallet = async () => {
+    try {
+      // Find the actual Trust Wallet provider (handles multiple wallet extensions)
+      let trustProvider = null;
+
+      // First check for dedicated Trust Wallet provider
+      if (window.trustwallet) {
+        trustProvider = window.trustwallet;
+      } else if (window.ethereum?.providers?.length) {
+        // Multiple wallets installed - find Trust Wallet specifically
+        trustProvider = window.ethereum.providers.find(p => p.isTrust);
+      } else if (window.ethereum?.isTrust) {
+        // Single wallet and it's Trust Wallet
+        trustProvider = window.ethereum;
+      }
+
+      if (!trustProvider) {
+        // On mobile, offer to open in Trust Wallet app
+        if (isMobile()) {
+          const trustWalletDeepLink = `https://link.trustwallet.com/open_url?coin_id=60&url=${encodeURIComponent(window.location.href)}`;
+
+          if (confirm('Trust Wallet not detected. Would you like to open this page in the Trust Wallet app?')) {
+            window.location.href = trustWalletDeepLink;
+            return;
+          }
+        }
+        // Fall back to WalletConnect (Trust Wallet supports it)
+        alert('Trust Wallet not detected. Opening WalletConnect for mobile connection...');
+        await connectWalletConnect();
+        return;
+      }
+
+      // Clear previous wallet state before connecting
+      resetWalletState();
+
+      // Switch to BSC first
+      await switchToBsc(trustProvider);
+
+      const web3Provider = new ethers.providers.Web3Provider(trustProvider);
+      await web3Provider.send("eth_requestAccounts", []);
+      const web3Signer = web3Provider.getSigner();
+      const address = await web3Signer.getAddress();
+      setProvider(web3Provider); setSigner(web3Signer); setAccount(address);
+      setWalletType(WALLET_TYPES.TRUST_WALLET);
+      localStorage.setItem(LAST_WALLET_KEY, WALLET_TYPES.TRUST_WALLET);
+      const gameContract = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, web3Signer);
+      const token = new ethers.Contract(TOKEN_ADDRESS, TOKEN_ABI, web3Signer);
+      setContract(gameContract); setTokenContract(token);
+      await loadData(token, gameContract, address, web3Provider);
+      setShowWalletModal(false);
+    } catch (error) { console.error('Error:', error); alert('Failed to connect Trust Wallet: ' + error.message); }
+  };
+
+
   const connectWalletConnect = async () => {
     try {
+      // Clear previous wallet state before connecting
+      resetWalletState();
+
       const EthereumProvider = (await import('@walletconnect/ethereum-provider')).default;
       if (WALLETCONNECT_PROJECT_ID === "YOUR_WALLETCONNECT_PROJECT_ID") { alert('Please set WALLETCONNECT_PROJECT_ID'); return; }
-      const wc = await EthereumProvider.init({ projectId: WALLETCONNECT_PROJECT_ID, chains: [1], showQrModal: true });
+      const wc = await EthereumProvider.init({
+        projectId: WALLETCONNECT_PROJECT_ID,
+        chains: [BSC_CHAIN_ID],
+        optionalChains: [1, BSC_CHAIN_ID],
+        rpcMap: {
+          [BSC_CHAIN_ID]: BSC_RPC_URL,
+          1: 'https://eth.llamarpc.com'
+        },
+        showQrModal: true
+      });
       await wc.enable();
       const web3Provider = new ethers.providers.Web3Provider(wc);
       const web3Signer = web3Provider.getSigner();
       const address = await web3Signer.getAddress();
       setWcProvider(wc); setProvider(web3Provider); setSigner(web3Signer); setAccount(address);
+      setWalletType(WALLET_TYPES.WALLETCONNECT);
+      localStorage.setItem(LAST_WALLET_KEY, WALLET_TYPES.WALLETCONNECT);
       const gameContract = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, web3Signer);
       const token = new ethers.Contract(TOKEN_ADDRESS, TOKEN_ABI, web3Signer);
       setContract(gameContract); setTokenContract(token);
-      await loadData(token, gameContract, address);
+      await loadData(token, gameContract, address, web3Provider);
       setShowWalletModal(false);
       wc.on('disconnect', disconnectWallet);
-    } catch (error) { console.error('Error:', error); alert('WalletConnect failed. Use MetaMask.'); }
+    } catch (error) { console.error('Error:', error); alert('WalletConnect failed. Try MetaMask or Trust Wallet.'); }
   };
 
-  const disconnectWallet = () => { wcProvider?.disconnect(); setWcProvider(null); setProvider(null); setSigner(null); setAccount(''); setContract(null); setTokenContract(null); };
-  const handleWalletSelect = (w) => w === 'metamask' ? connectMetaMask() : connectWalletConnect();
+  const disconnectWallet = () => {
+    wcProvider?.disconnect();
+    setWcProvider(null);
+    setProvider(null);
+    setSigner(null);
+    setAccount('');
+    setContract(null);
+    setTokenContract(null);
+    setBnbBalance('0');
+    setBalance('0');
+    setWalletType(null);
+    localStorage.removeItem(LAST_WALLET_KEY);
+  };
 
-  const loadData = async (token, gameContract, address) => {
+  const handleWalletSelect = (w) => {
+    if (w === 'metamask') connectMetaMask();
+    else if (w === 'trustwallet') connectTrustWallet();
+    else connectWalletConnect();
+  };
+
+  const loadData = async (token, gameContract, address, web3Provider = provider) => {
     try {
-      const [bal, allowance] = await Promise.all([token.balanceOf(address).catch(()=>ethers.BigNumber.from(0)), token.allowance(address, CONTRACT_ADDRESS).catch(()=>ethers.BigNumber.from(0))]);
+      // Fetch native BNB balance alongside token balance
+      const [bal, allowance, nativeBalance] = await Promise.all([
+        token.balanceOf(address).catch(()=>ethers.BigNumber.from(0)),
+        token.allowance(address, CONTRACT_ADDRESS).catch(()=>ethers.BigNumber.from(0)),
+        web3Provider?.getBalance(address).catch(()=>ethers.BigNumber.from(0)) || Promise.resolve(ethers.BigNumber.from(0))
+      ]);
       setBalance(ethers.utils.formatEther(bal));
+      setBnbBalance(parseFloat(ethers.utils.formatEther(nativeBalance)).toFixed(4));
       setNeedsApproval(parseFloat(ethers.utils.formatEther(allowance)) < 10000);
       const [spinInfo, usageStats, winners, tiers, contractBal, cost] = await Promise.all([
         gameContract.getPlayerSpinInfo(address), gameContract.getPlayerUsageStats(address),
@@ -195,15 +415,133 @@ export default function BabyBigFiveSpin() {
     } catch (error) { console.error('Error loading data:', error); }
   };
 
+  // Refresh balances periodically (every 15 seconds when connected)
+  useEffect(() => {
+    if (!tokenContract || !contract || !account || !provider) return;
+
+    const refreshInterval = setInterval(() => {
+      loadData(tokenContract, contract, account, provider);
+    }, 15000);
+
+    return () => clearInterval(refreshInterval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tokenContract, contract, account, provider]);
+
+  // Auto-reconnect on page load
+  useEffect(() => {
+    const lastWallet = localStorage.getItem(LAST_WALLET_KEY);
+    if (!lastWallet || account) return;
+
+    const attemptReconnect = async () => {
+      try {
+        if (lastWallet === WALLET_TYPES.METAMASK) {
+          // Find MetaMask provider properly
+          let metamaskProvider = null;
+          if (window.ethereum?.providers?.length) {
+            metamaskProvider = window.ethereum.providers.find(p => p.isMetaMask === true && p.isTrust !== true);
+          } else if (window.ethereum?.isMetaMask === true && window.ethereum?.isTrust !== true) {
+            metamaskProvider = window.ethereum;
+          }
+
+          if (metamaskProvider) {
+            const accounts = await metamaskProvider.request({ method: 'eth_accounts' });
+            if (accounts.length > 0) {
+              await connectMetaMask();
+            }
+          }
+        } else if (lastWallet === WALLET_TYPES.TRUST_WALLET) {
+          // Find Trust Wallet provider properly
+          let trustProvider = null;
+          if (window.trustwallet) {
+            trustProvider = window.trustwallet;
+          } else if (window.ethereum?.providers?.length) {
+            trustProvider = window.ethereum.providers.find(p => p.isTrust);
+          } else if (window.ethereum?.isTrust) {
+            trustProvider = window.ethereum;
+          }
+
+          if (trustProvider) {
+            const accounts = await trustProvider.request({ method: 'eth_accounts' });
+            if (accounts.length > 0) {
+              await connectTrustWallet();
+            }
+          }
+        }
+        // Note: WalletConnect requires user interaction for reconnect, so we skip auto-reconnect for it
+      } catch (error) {
+        console.error('Auto-reconnect failed:', error);
+        localStorage.removeItem(LAST_WALLET_KEY);
+      }
+    };
+
+    attemptReconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Helper to check and switch to BSC network
+  const ensureBscNetwork = async () => {
+    if (!provider) return false;
+    try {
+      const network = await provider.getNetwork();
+      if (network.chainId !== BSC_CHAIN_ID) {
+        // Try to switch to BSC
+        try {
+          await window.ethereum?.request({
+            method: 'wallet_switchEthereumChain',
+            params: [{ chainId: `0x${BSC_CHAIN_ID.toString(16)}` }],
+          });
+          return true;
+        } catch (switchError) {
+          // Chain not added, try to add it
+          if (switchError.code === 4902) {
+            await window.ethereum?.request({
+              method: 'wallet_addEthereumChain',
+              params: [{
+                chainId: `0x${BSC_CHAIN_ID.toString(16)}`,
+                chainName: 'BNB Smart Chain',
+                nativeCurrency: { name: 'BNB', symbol: 'BNB', decimals: 18 },
+                rpcUrls: [BSC_RPC_URL],
+                blockExplorerUrls: ['https://bscscan.com']
+              }],
+            });
+            return true;
+          }
+          alert('Please switch to BNB Smart Chain (BSC) network to continue.');
+          return false;
+        }
+      }
+      return true;
+    } catch (error) {
+      console.error('Network check failed:', error);
+      return false;
+    }
+  };
+
   const handleDeposit = async (amount) => {
     if (!contract || !tokenContract) return;
     try {
+      // Ensure we're on BSC network
+      const onBsc = await ensureBscNetwork();
+      if (!onBsc) return;
+
       const depositAmount = ethers.utils.parseEther(amount);
       const currentAllowance = await tokenContract.allowance(account, CONTRACT_ADDRESS);
-      if (currentAllowance.lt(depositAmount)) { const approveTx = await tokenContract.approve(CONTRACT_ADDRESS, ethers.constants.MaxUint256); await approveTx.wait(); }
-      const tx = await contract.deposit(depositAmount); await tx.wait();
-      await loadData(tokenContract, contract, account); setShowDepositModal(false);
-    } catch (error) { console.error('Error:', error); alert('Deposit failed: ' + (error.reason || error.message)); }
+      if (currentAllowance.lt(depositAmount)) {
+        const approveTx = await tokenContract.approve(CONTRACT_ADDRESS, ethers.constants.MaxUint256);
+        await approveTx.wait();
+      }
+      const tx = await contract.deposit(depositAmount);
+      await tx.wait();
+      await loadData(tokenContract, contract, account);
+      setShowDepositModal(false);
+    } catch (error) {
+      console.error('Error:', error);
+      if (error.code === 'CALL_EXCEPTION' && error.data === '0x') {
+        alert('Contract not found. Please make sure you are connected to BNB Smart Chain (BSC).');
+      } else {
+        alert('Deposit failed: ' + (error.reason || error.message));
+      }
+    }
   };
 
   const handleWithdraw = async (amount) => {
@@ -249,8 +587,17 @@ export default function BabyBigFiveSpin() {
           {!account ? (
             <button onClick={() => setShowWalletModal(true)} className="flex items-center gap-2 bg-orange-500 hover:bg-orange-600 px-6 py-3 rounded-xl font-semibold transition"><Wallet className="w-5 h-5" /> Connect Wallet</button>
           ) : (
-            <div className="flex items-center gap-3">
-              <div className="flex items-center gap-2 bg-gray-900 px-4 py-2 rounded-xl"><div className="w-2 h-2 bg-green-500 rounded-full"></div><span className="font-mono">{formatAddress(account)}</span></div>
+            <div className="flex items-center gap-3 flex-wrap">
+              <div className="flex items-center gap-2 bg-gray-900 px-4 py-2 rounded-xl">
+                <span className="text-orange-500 font-semibold">{formatNumber(balance)} BBFT</span>
+              </div>
+              <div className="flex items-center gap-2 bg-gray-900 px-4 py-2 rounded-xl">
+                <span className="text-yellow-500 font-semibold">{bnbBalance} BNB</span>
+              </div>
+              <div className="flex items-center gap-2 bg-gray-900 px-4 py-2 rounded-xl">
+                <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+                <span className="font-mono">{formatAddress(account)}</span>
+              </div>
               <button onClick={disconnectWallet} className="px-4 py-2 bg-gray-800 hover:bg-gray-700 rounded-xl text-sm transition">Disconnect</button>
             </div>
           )}
@@ -311,7 +658,7 @@ export default function BabyBigFiveSpin() {
             {lastWin && <div className="bg-green-500/20 border border-green-500 rounded-xl p-4 mb-6 text-center"><p className="text-green-400 font-bold text-lg">🎉 Won {formatNumber(lastWin.amount)} BBFT!</p><p className="text-gray-300 text-sm">{lastWin.tier}</p></div>}
             {!account ? (
               <button onClick={() => setShowWalletModal(true)} className="w-full bg-orange-500 hover:bg-orange-600 py-4 rounded-xl font-bold text-lg transition">Connect Wallet to Spin</button>
-            ) : parseFloat(depositedAmount) < 10000 ? (
+            ) : parseFloat(depositedAmount) < 10000 && playerInfo.availableSpins === 0 ? (
               <button onClick={() => setShowDepositModal(true)} className="w-full bg-orange-500 hover:bg-orange-600 py-4 rounded-xl font-bold text-lg transition">Deposit 10k BBFT to Play</button>
             ) : (
               <button onClick={spinWheel} disabled={isSpinning || playerInfo.availableSpins === 0} className="w-full bg-orange-500 hover:bg-orange-600 disabled:bg-gray-700 disabled:cursor-not-allowed py-4 rounded-xl font-bold text-lg transition flex items-center justify-center gap-2">

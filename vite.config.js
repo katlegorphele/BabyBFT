@@ -7,5 +7,9 @@ export default defineConfig({
   plugins: [tailwindcss(),
     react()
   ],
+  server: {
+    host: true,
+    allowedHosts: ["equipollently-extenuating-hubert.ngrok-free.dev"]
+  }
 
 })
