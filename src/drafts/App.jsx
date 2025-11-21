@@ -1,888 +1,586 @@
 import React, { useState, useEffect } from 'react';
-import { Calculator, TrendingUp, DollarSign, Zap, AlertCircle, CheckCircle, Target, BarChart3, Percent, RefreshCw, Layers, ArrowRight } from 'lucide-react';
+import { ethers } from 'ethers';
+import { Loader2, Wallet, TrendingUp, Trophy, RefreshCw, X } from 'lucide-react';
 
-const App = () => {
-  const [usdcAmount, setUsdcAmount] = useState('100');
-  const [borrowAmount, setBorrowAmount] = useState('');
-  const [maxLoops, setMaxLoops] = useState(3);
-  const [currentLoop, setCurrentLoop] = useState(0);
-  const [currentStep, setCurrentStep] = useState(0);
-  const [status, setStatus] = useState('Ready to start');
-  const [txHash, setTxHash] = useState('');
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [account, setAccount] = useState(null);
-  const [loops, setLoops] = useState([]);
-  const [balances, setBalances] = useState({
-    eth: '0',
-    usdc: '0',
-    usde: '0',
-    susde: '0',
-    ptSusde: '0'
-  });
+// Contract ABI (add your deployed contract address)
 
-  const steps = [
-    { name: 'Swap USDC → USDe', icon: '🔄' },
-    { name: 'Stake USDe → sUSDe', icon: '🏦' },
-    { name: 'Swap sUSDe → PT-sUSDe', icon: '⚡' },
-    { name: 'Supply PT & Borrow USDC', icon: '💰' }
-  ];
+const CONTRACT_ADDRESS = "0xF8564E2C94633a714c2f0B8AA66E13C4c7c0cE98"; //"0x59c863E77791eEe6746E24E183cf026a1A6C94B9";//"0x7B8eFa883755Dd042D8e365432BA6238489BC69c";
+const TOKEN_ADDRESS = "0x900186aa7B0CbDe4C43AeE8Db110d51b68DEe3B1";
 
-  // Yield rates
-  const yieldRates = {
-    susdeApy: 12.5,
-    ptSusdeImpliedApy: 15.2,
-    morphoBorrowApy: 8.3,
-    loopedYield: 0
-  };
+const CONTRACT_ABI = [
+  "function spin() external returns (uint256)",
+  "function getPlayerSpins(address player) external view returns (uint256[])",
+  "function getRecentWinners(uint256 count) external view returns (tuple(address player, uint256 spinCost, uint256 prizeAmount, uint256 tierIndex, uint256 timestamp, bytes32 requestId)[])",
+  "function playerStats(address player) external view returns (uint256 totalSpins, uint256 totalWinnings, uint256 lastSpinTime)",
+  "function getContractBalance() external view returns (uint256)",
+  "function getAllPrizeTiers() external view returns (tuple(uint256 prizeAmount, uint256 probability, string name)[])",
+  "event SpinCompleted(address indexed player, uint256 indexed spinId, uint256 tierIndex, uint256 prizeAmount, uint256 timestamp)"
+];
 
-  // Calculate multi-loop estimates
-  const calculateMultiLoopEstimates = () => {
-    let totalCollateral = 0;
-    let totalBorrowed = 0;
-    let totalInputUsed = parseFloat(usdcAmount) || 0;
-    let loopEstimates = [];
-    let availableUSDC = totalInputUsed;
+const TOKEN_ABI = [
+  "function balanceOf(address account) external view returns (uint256)",
+  "function approve(address spender, uint256 amount) external returns (bool)",
+  "function allowance(address owner, address spender) external view returns (uint256)"
+];
 
-    for (let i = 0; i < maxLoops && availableUSDC > 1; i++) {
-      const inputAmount = i === 0 ? availableUSDC : availableUSDC;
-      
-      // Calculate conversions with slippage
-      const estimatedUSDe = inputAmount * (1 - 0.005);
-      const estimatedSUSDe = estimatedUSDe;
-      const estimatedPTSUSDe = estimatedSUSDe * (1 - 0.01);
-      const maxBorrowUSDC = estimatedPTSUSDe * 0.75; // 75% LTV
-      
-      // Use custom borrow amount for first loop, max for subsequent loops
-      const customBorrowAmount = parseFloat(borrowAmount) || 0;
-      const actualBorrowAmount = (i === 0 && customBorrowAmount > 0) 
-        ? Math.min(customBorrowAmount, maxBorrowUSDC) 
-        : Math.min(maxBorrowUSDC, availableUSDC * 0.8); // Be conservative on subsequent loops
+const PRIZE_COLORS = ['#3B82F6', '#A855F7', '#EC4899', '#10B981', '#F59E0B', '#6B7280'];
+const SPIN_COST = "10000";
 
-      totalCollateral += estimatedPTSUSDe;
-      totalBorrowed += actualBorrowAmount;
-      
-      const loopData = {
-        loopNumber: i + 1,
-        inputUsdc: inputAmount,
-        estimatedUSDe: estimatedUSDe,
-        estimatedSUSDe: estimatedSUSDe,
-        estimatedPTSUSDe: estimatedPTSUSDe,
-        maxBorrowUSDC: maxBorrowUSDC,
-        actualBorrowAmount: actualBorrowAmount,
-        cumulativeCollateral: totalCollateral,
-        cumulativeBorrowed: totalBorrowed
-      };
-      
-      loopEstimates.push(loopData);
-      
-      // Next loop uses the borrowed USDC
-      availableUSDC = actualBorrowAmount;
-      
-      // Stop if borrowed amount becomes too small
-      if (actualBorrowAmount < 5) break;
-    }
+// WalletConnect Modal Component
+function WalletModal({ isOpen, onClose, onSelectWallet }) {
+  if (!isOpen) return null;
 
-    // Calculate overall yields
-    const totalPtYieldAnnual = (totalCollateral * yieldRates.ptSusdeImpliedApy) / 100;
-    const totalBorrowCostAnnual = (totalBorrowed * yieldRates.morphoBorrowApy) / 100;
-    const netYieldAnnual = totalPtYieldAnnual - totalBorrowCostAnnual;
-    const overallApy = totalInputUsed > 0 ? (netYieldAnnual / totalInputUsed) * 100 : 0;
-    const leverageMultiplier = totalInputUsed > 0 ? (totalInputUsed + totalBorrowed) / totalInputUsed : 1;
+  return (
+    <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
+      <div className="bg-gray-900 rounded-2xl p-6 max-w-md w-full border border-gray-800">
+        <div className="flex items-center justify-between mb-6">
+          <h2 className="text-xl font-bold">Connect Wallet</h2>
+          <button onClick={onClose} className="text-gray-400 hover:text-white">
+            <X className="w-6 h-6" />
+          </button>
+        </div>
+        
+        <div className="space-y-3">
+          <button
+            onClick={() => onSelectWallet('metamask')}
+            className="w-full flex items-center gap-4 bg-gray-800 hover:bg-gray-700 p-4 rounded-xl transition"
+          >
+            <div className="w-12 h-12 bg-orange-500 rounded-xl flex items-center justify-center">
+              <span className="text-2xl">🦊</span>
+            </div>
+            <div className="text-left">
+              <p className="font-semibold">MetaMask</p>
+              <p className="text-sm text-gray-400">Connect with MetaMask</p>
+            </div>
+          </button>
 
-    return {
-      loops: loopEstimates,
-      totalCollateral: totalCollateral.toFixed(2),
-      totalBorrowed: totalBorrowed.toFixed(2),
-      totalPtYieldAnnual: totalPtYieldAnnual.toFixed(2),
-      totalBorrowCostAnnual: totalBorrowCostAnnual.toFixed(2),
-      netYieldAnnual: netYieldAnnual.toFixed(2),
-      overallApy: overallApy.toFixed(2),
-      leverageMultiplier: leverageMultiplier.toFixed(2),
-      totalInputUsed: totalInputUsed.toFixed(2)
-    };
-  };
+          <button
+            onClick={() => onSelectWallet('walletconnect')}
+            className="w-full flex items-center gap-4 bg-gray-800 hover:bg-gray-700 p-4 rounded-xl transition"
+          >
+            <div className="w-12 h-12 bg-blue-500 rounded-xl flex items-center justify-center">
+              <span className="text-2xl">🔗</span>
+            </div>
+            <div className="text-left">
+              <p className="font-semibold">WalletConnect</p>
+              <p className="text-sm text-gray-400">Scan with mobile wallet</p>
+            </div>
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
-  const multiLoopEstimates = calculateMultiLoopEstimates();
+export default function BabyBigFiveSpin() {
+  const [provider, setProvider] = useState(null);
+  const [signer, setSigner] = useState(null);
+  const [account, setAccount] = useState('');
+  const [contract, setContract] = useState(null);
+  const [tokenContract, setTokenContract] = useState(null);
+  
+  const [balance, setBalance] = useState('0');
+  const [contractBalance, setContractBalance] = useState('0');
+  const [availableSpins, setAvailableSpins] = useState(0);
+  const [totalWinnings, setTotalWinnings] = useState('0');
+  const [playerStats, setPlayerStats] = useState({ totalSpins: 0, totalWinnings: '0' });
+  const [recentWinners, setRecentWinners] = useState([]);
+  const [prizeTiers, setPrizeTiers] = useState([]);
+  
+  const [isSpinning, setIsSpinning] = useState(false);
+  const [rotation, setRotation] = useState(0);
+  const [lastWin, setLastWin] = useState(null);
+  const [needsApproval, setNeedsApproval] = useState(true);
+  const [isApproving, setIsApproving] = useState(false);
+  const [showWalletModal, setShowWalletModal] = useState(false);
 
-  // Connect wallet function
-  const connectWallet = async () => {
-    if (!window.ethereum) {
-      alert("Please install MetaMask.");
-      return;
-    }
-
+  // Connect with MetaMask
+  const connectMetaMask = async () => {
     try {
-      const mockAccount = {
-        address: '0x742D35Cc6C4C5632C3F77f1c6a4c5b5c5d5e5f60',
-        balance: '2.4563',
-        chainId: 1
-      };
+      if (typeof window.ethereum === 'undefined') {
+        alert('Please install MetaMask!');
+        return;
+      }
+
+      const web3Provider = new ethers.providers.Web3Provider(window.ethereum);
+      await web3Provider.send("eth_requestAccounts", []);
+      const web3Signer = web3Provider.getSigner();
+      const address = await web3Signer.getAddress();
+
+      setProvider(web3Provider);
+      setSigner(web3Signer);
+      setAccount(address);
+
+      const gameContract = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, web3Signer);
+      const token = new ethers.Contract(TOKEN_ADDRESS, TOKEN_ABI, web3Signer);
       
-      setAccount(mockAccount);
+      setContract(gameContract);
+      setTokenContract(token);
+
+      await loadData(token, gameContract, address);
+      setShowWalletModal(false);
+    } catch (error) {
+      console.error('Error connecting MetaMask:', error);
+      alert('Failed to connect MetaMask');
+    }
+  };
+
+  // Connect with WalletConnect
+  const connectWalletConnect = async () => {
+    try {
+      // For WalletConnect v2, you would need @walletconnect/ethereum-provider
+      // This is a simplified version showing the concept
+      alert('WalletConnect integration requires @walletconnect/ethereum-provider package. For now, please use MetaMask or install the WalletConnect package.');
       
-      setBalances({
-        eth: '2.4563',
-        usdc: '2500.00',
-        usde: '340.25',
-        susde: '158.75',
-        ptSusde: '89.50'
+      // Example implementation (requires additional setup):
+      /*
+      const WalletConnectProvider = (await import('@walletconnect/ethereum-provider')).default;
+      
+      const wcProvider = await WalletConnectProvider.init({
+        projectId: 'YOUR_WALLETCONNECT_PROJECT_ID',
+        chains: [1], // Ethereum mainnet
+        showQrModal: true
       });
 
-      setStatus('Wallet connected successfully');
+      await wcProvider.enable();
+      
+      const web3Provider = new ethers.providers.Web3Provider(wcProvider);
+      const web3Signer = web3Provider.getSigner();
+      const address = await web3Signer.getAddress();
 
-    } catch (err) {
-      console.error("Wallet connection failed:", err);
-      setStatus("Wallet connection failed");
+      setProvider(web3Provider);
+      setSigner(web3Signer);
+      setAccount(address);
+
+      const gameContract = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, web3Signer);
+      const token = new ethers.Contract(TOKEN_ADDRESS, TOKEN_ABI, web3Signer);
+      
+      setContract(gameContract);
+      setTokenContract(token);
+
+      await loadData(token, gameContract, address);
+      setShowWalletModal(false);
+      */
+    } catch (error) {
+      console.error('Error connecting WalletConnect:', error);
+      alert('Failed to connect WalletConnect');
     }
   };
 
-  const executeMultiLoop = async () => {
-    if (!usdcAmount || parseFloat(usdcAmount) <= 0) {
-      setStatus('Please enter a valid USDC amount');
-      return;
+  // Handle wallet selection
+  const handleWalletSelect = (wallet) => {
+    if (wallet === 'metamask') {
+      connectMetaMask();
+    } else if (wallet === 'walletconnect') {
+      connectWalletConnect();
     }
+  };
 
-    if (!account) {
-      setStatus('Please connect your wallet first');
-      return;
-    }
-
-    setIsProcessing(true);
-    setCurrentLoop(0);
-    setCurrentStep(0);
-    setLoops([]);
-    
+  // Load all contract data
+  const loadData = async (token, gameContract, address) => {
     try {
-      for (let i = 0; i < multiLoopEstimates.loops.length; i++) {
-        setCurrentLoop(i + 1);
-        setStatus(`Executing Loop ${i + 1} of ${multiLoopEstimates.loops.length}...`);
-        
-        await executeLoop(multiLoopEstimates.loops[i], i + 1);
-        
-        // Add completed loop to history
-        setLoops(prev => [...prev, {
-          ...multiLoopEstimates.loops[i],
-          completed: true,
-          timestamp: new Date().toISOString()
-        }]);
+      const [bal, allowance, stats, winners, tiers, contractBal] = await Promise.all([
+        token.balanceOf(address),
+        token.allowance(address, CONTRACT_ADDRESS),
+        gameContract.playerStats(address),
+        gameContract.getRecentWinners(3),
+        gameContract.getAllPrizeTiers(),
+        gameContract.getContractBalance()
+      ]);
 
-        // Small delay between loops
-        if (i < multiLoopEstimates.loops.length - 1) {
-          await new Promise(resolve => setTimeout(resolve, 1000));
-        }
-      }
+      const balanceFormatted = ethers.utils.formatEther(bal);
+      setBalance(balanceFormatted);
+      setAvailableSpins(Math.floor(parseFloat(balanceFormatted) / parseFloat(SPIN_COST)));
       
-      setStatus(`✅ All ${multiLoopEstimates.loops.length} loops completed! Total APY: ${multiLoopEstimates.overallApy}%`);
-      setCurrentLoop(0);
-      setCurrentStep(0);
+      const contractBalFormatted = ethers.utils.formatEther(contractBal);
+      setContractBalance(contractBalFormatted);
+      
+      const allowanceFormatted = ethers.utils.formatEther(allowance);
+      setNeedsApproval(parseFloat(allowanceFormatted) < parseFloat(SPIN_COST));
+
+      setPlayerStats({
+        totalSpins: stats.totalSpins.toNumber(),
+        totalWinnings: ethers.utils.formatEther(stats.totalWinnings)
+      });
+
+      setTotalWinnings(ethers.utils.formatEther(stats.totalWinnings));
+
+      const formattedWinners = winners.map(w => ({
+        player: w.player,
+        prizeAmount: ethers.utils.formatEther(w.prizeAmount),
+        tierIndex: w.tierIndex,
+        timestamp: new Date(w.timestamp.toNumber() * 1000)
+      }));
+      setRecentWinners(formattedWinners);
+
+      const formattedTiers = tiers.map(t => ({
+        prizeAmount: ethers.utils.formatEther(t.prizeAmount),
+        probability: t.probability / 100,
+        name: t.name
+      }));
+      setPrizeTiers(formattedTiers);
+
+    } catch (error) {
+      console.error('Error loading data:', error);
+    }
+  };
+
+  // Approve token spending
+  const approveTokens = async () => {
+    if (!tokenContract) return;
+    
+    setIsApproving(true);
+    try {
+      const tx = await tokenContract.approve(
+        CONTRACT_ADDRESS,
+        ethers.constants.MaxUint256
+      );
+      await tx.wait();
+      setNeedsApproval(false);
+      alert('Approval successful! You can now spin.');
+    } catch (error) {
+      console.error('Error approving:', error);
+      alert('Approval failed');
+    } finally {
+      setIsApproving(false);
+    }
+  };
+
+  // Spin the wheel
+  const spinWheel = async () => {
+    if (!contract || isSpinning || needsApproval) return;
+    
+    setIsSpinning(true);
+    setLastWin(null);
+
+    try {
+      // Send transaction first
+      const tx = await contract.spin();
+      
+      // Wait for transaction and listen for event
+      const receipt = await tx.wait();
+      
+      // Find SpinCompleted event
+      const event = receipt.events?.find(e => e.event === 'SpinCompleted');
+      
+      if (event) {
+        const tierIndex = event.args.tierIndex.toNumber();
+        const prizeAmount = ethers.utils.formatEther(event.args.prizeAmount);
+        
+        // Calculate where the winning segment should land
+        const segmentAngle = 360 / prizeTiers.length; // 60 degrees per segment
+        
+        // The wheel segments start from top center (0°) and go clockwise
+        // We want the CENTER of the winning segment to align with the pointer
+        // Each segment spans from (tierIndex * 60°) to ((tierIndex + 1) * 60°)
+        // So the center of a segment is at (tierIndex * 60°) + 30°
+        const segmentCenterOffset = segmentAngle / 2; // 30 degrees to center of segment
+        const targetAngle = (tierIndex * segmentAngle) + segmentCenterOffset;
+        
+        // Calculate total rotation: multiple full spins + landing position
+        const numberOfSpins = 5 + Math.floor(Math.random() * 3); // 5-7 full rotations
+        const currentRotation = rotation % 360;
+        
+        // We rotate TO the target, accounting for current position
+        const finalRotation = rotation - currentRotation + (numberOfSpins * 360) + (360 - targetAngle);
+        
+        setRotation(finalRotation);
+        
+        setTimeout(() => {
+          setLastWin({
+            tier: prizeTiers[tierIndex]?.name || `Prize ${tierIndex}`,
+            amount: prizeAmount
+          });
+        }, 3000);
+      }
+
+      // Reload data
+      await loadData(tokenContract, contract, account);
       
     } catch (error) {
-      console.error('Multi-loop failed:', error);
-      setStatus(`Error: ${error.message}`);
+      console.error('Error spinning:', error);
+      alert('Spin failed: ' + (error.reason || error.message));
     } finally {
-      setIsProcessing(false);
+      setTimeout(() => setIsSpinning(false), 3500);
     }
   };
 
-  const executeLoop = async (loopData, loopNumber) => {
-    await simulateStep1(loopData, loopNumber);
-    await simulateStep2(loopData, loopNumber);
-    await simulateStep3(loopData, loopNumber);
-    await simulateStep4(loopData, loopNumber);
+  // Auto-load data on mount
+  useEffect(() => {
+    if (tokenContract && contract && account) {
+      loadData(tokenContract, contract, account);
+    }
+  }, [tokenContract, contract, account]);
+
+  const formatAddress = (addr) => {
+    if (!addr) return '';
+    return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
   };
 
-  const simulateStep1 = async (loopData, loopNumber) => {
-    setCurrentStep(1);
-    setStatus(`Loop ${loopNumber}: Swapping ${loopData.inputUsdc.toFixed(2)} USDC → USDe...`);
-    await new Promise(resolve => setTimeout(resolve, 1500));
-    setStatus(`✅ Loop ${loopNumber}: USDC → USDe swap completed`);
-    setTxHash(`0x${loopNumber}234567890abcdef1234567890abcdef12345678`);
+  const formatNumber = (num) => {
+    return parseFloat(num).toLocaleString('en-US', { maximumFractionDigits: 0 });
   };
 
-  const simulateStep2 = async (loopData, loopNumber) => {
-    setCurrentStep(2);
-    setStatus(`Loop ${loopNumber}: Staking ${loopData.estimatedUSDe.toFixed(2)} USDe → sUSDe...`);
-    await new Promise(resolve => setTimeout(resolve, 1200));
-    setStatus(`✅ Loop ${loopNumber}: USDe → sUSDe staking completed`);
-    setTxHash(`0xabc${loopNumber}ef1234567890abcdef1234567890abcdef12`);
-  };
-
-  const simulateStep3 = async (loopData, loopNumber) => {
-    setCurrentStep(3);
-    setStatus(`Loop ${loopNumber}: Swapping ${loopData.estimatedSUSDe.toFixed(2)} sUSDe → PT-sUSDe...`);
-    await new Promise(resolve => setTimeout(resolve, 1800));
-    setStatus(`✅ Loop ${loopNumber}: sUSDe → PT-sUSDe swap completed`);
-    setTxHash(`0x567${loopNumber}90abcdef1234567890abcdef1234567890ab`);
-  };
-
-  const simulateStep4 = async (loopData, loopNumber) => {
-    setCurrentStep(4);
-    setStatus(`Loop ${loopNumber}: Supplying ${loopData.estimatedPTSUSDe.toFixed(2)} PT-sUSDe and borrowing ${loopData.actualBorrowAmount.toFixed(2)} USDC...`);
-    await new Promise(resolve => setTimeout(resolve, 2000));
-    setStatus(`✅ Loop ${loopNumber} completed! Borrowed ${loopData.actualBorrowAmount.toFixed(2)} USDC`);
-    setTxHash(`0x90abc${loopNumber}ef1234567890abcdef1234567890abcdef`);
-    setCurrentStep(0);
-    
-    // Update balances to show cumulative effect
-    setBalances(prev => ({
-      ...prev,
-      ptSusde: loopData.cumulativeCollateral.toFixed(2),
-      usdc: (parseFloat(prev.usdc) + loopData.actualBorrowAmount).toFixed(2)
-    }));
+  const getTimeSince = (date) => {
+    const seconds = Math.floor((new Date() - date) / 1000);
+    const days = Math.floor(seconds / 86400);
+    if (days > 0) return `${days} days ago`;
+    const hours = Math.floor(seconds / 3600);
+    if (hours > 0) return `${hours} hours ago`;
+    const minutes = Math.floor(seconds / 60);
+    if (minutes > 0) return `${minutes} min ago`;
+    return 'Just now';
   };
 
   return (
-    <div className="min-h-screen w-full bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-white">
-      {/* Header */}
-      <div className="w-full bg-slate-800/50 backdrop-blur-sm border-b border-slate-700 px-6 py-4">
-        <div className="max-w-7xl mx-auto flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold bg-gradient-to-r from-blue-400 to-purple-500 bg-clip-text text-transparent">
-              Multi-Loop USDC Yield Strategy
-            </h1>
-            <p className="text-slate-400 text-sm">
-              Recursive leveraged yield farming with compounding APY
-            </p>
+    <div className="min-h-screen bg-black text-white p-4 md:p-8">
+      <WalletModal 
+        isOpen={showWalletModal} 
+        onClose={() => setShowWalletModal(false)}
+        onSelectWallet={handleWalletSelect}
+      />
+
+      <div className="max-w-7xl mx-auto">
+        {/* Header */}
+        <div className="flex items-center justify-between mb-8">
+          <div className="flex items-center gap-3">
+            <div className="w-12 h-12 bg-orange-500 rounded-xl flex items-center justify-center">
+              <TrendingUp className="w-7 h-7" />
+            </div>
+            <div>
+              <h1 className="text-2xl font-bold">Baby Big Five Spin</h1>
+              <p className="text-sm text-gray-400">Win BFT</p>
+            </div>
           </div>
           
-          <div className="flex items-center space-x-4">
-            {account && (
-              <div className="text-right">
-                <div className="text-sm font-medium text-slate-300">
-                  {account.address.slice(0, 6)}...{account.address.slice(-4)}
-                </div>
-                <div className="text-xs text-slate-400">
-                  {account.balance} ETH
-                </div>
-              </div>
-            )}
+          {!account ? (
             <button
-              onClick={connectWallet}
-              className={`px-6 py-2 rounded-lg font-medium transition-all ${
-                account 
-                  ? 'bg-green-600 hover:bg-green-700' 
-                  : 'bg-blue-600 hover:bg-blue-700'
-              }`}
+              onClick={() => setShowWalletModal(true)}
+              className="flex items-center gap-2 bg-orange-500 hover:bg-orange-600 px-6 py-3 rounded-xl font-semibold transition"
             >
-              {account ? '✅ Connected' : '🔗 Connect Wallet'}
+              <Wallet className="w-5 h-5" />
+              Connect Wallet
             </button>
+          ) : (
+            <div className="flex items-center gap-2 bg-gray-900 px-4 py-2 rounded-xl">
+              <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+              <span className="font-mono">{formatAddress(account)}</span>
+            </div>
+          )}
+        </div>
+
+        {/* Stats Cards */}
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+          <div className="bg-gray-900 rounded-2xl p-6">
+            <p className="text-gray-400 text-sm mb-1">BBFT Balance</p>
+            <p className="text-3xl font-bold">{formatNumber(balance)}</p>
+            <p className="text-gray-500 text-xs mt-1">Available to spend</p>
+          </div>
+          
+          <div className="bg-gray-900 rounded-2xl p-6">
+            <p className="text-gray-400 text-sm mb-1">Available Spins</p>
+            <p className="text-3xl font-bold text-orange-500">{availableSpins}</p>
+            <p className="text-gray-500 text-xs mt-1">@ {formatNumber(SPIN_COST)} BBFT each</p>
+          </div>
+          
+          <div className="bg-gray-900 rounded-2xl p-6">
+            <p className="text-gray-400 text-sm mb-1">Total Winnings</p>
+            <p className="text-3xl font-bold text-green-500">{formatNumber(totalWinnings)}</p>
+            <p className="text-gray-500 text-xs mt-1">All time earnings</p>
+          </div>
+
+          <div className="bg-gray-900 rounded-2xl p-6">
+            <p className="text-gray-400 text-sm mb-1">Prize Pool</p>
+            <p className="text-3xl font-bold text-blue-500">{formatNumber(contractBalance)}</p>
+            <p className="text-gray-500 text-xs mt-1">Contract balance</p>
           </div>
         </div>
-      </div>
 
-      <div className="max-w-7xl mx-auto p-6">
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          
-          {/* Left Column - Input & Loop Configuration */}
-          <div className="space-y-6">
-            
-            {/* Loop Configuration */}
-            <div className="bg-slate-800 rounded-xl p-6 border border-slate-700">
-              <div className="flex items-center mb-4">
-                <RefreshCw className="w-5 h-5 text-purple-400 mr-2" />
-                <h2 className="text-xl font-semibold">Loop Configuration</h2>
-              </div>
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          {/* Wheel Section */}
+          <div className="lg:col-span-2">
+            <div className="bg-gray-900 rounded-2xl p-8">
+              <h2 className="text-xl font-bold mb-6">Spin the Wheel!</h2>
               
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-slate-300 mb-2">
-                    Initial USDC Amount
-                  </label>
-                  <input
-                    type="number"
-                    value={usdcAmount}
-                    onChange={(e) => setUsdcAmount(e.target.value)}
-                    className="w-full px-4 py-3 bg-slate-700 border border-slate-600 rounded-lg text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    placeholder="Enter USDC amount"
-                    min="1"
-                    step="0.01"
-                    disabled={!account || isProcessing}
-                  />
+              {/* Wheel */}
+              <div className="relative w-full max-w-md mx-auto mb-8">
+                <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-2 z-10">
+                  <div className="w-0 h-0 border-l-[12px] border-r-[12px] border-t-[16px] border-l-transparent border-r-transparent border-t-orange-500"></div>
                 </div>
                 
-                <div>
-                  <label className="block text-sm font-medium text-slate-300 mb-2">
-                    Maximum Loop Iterations
-                  </label>
-                  <div className="flex items-center space-x-2">
-                    <input
-                      type="range"
-                      min="1"
-                      max="5"
-                      value={maxLoops}
-                      onChange={(e) => setMaxLoops(parseInt(e.target.value))}
-                      className="flex-1"
-                      disabled={!account || isProcessing}
-                    />
-                    <span className="text-lg font-bold text-purple-400 w-8">{maxLoops}</span>
-                  </div>
-                  <div className="text-xs text-slate-400 mt-1">
-                    More loops = Higher APY but increased complexity
-                  </div>
-                </div>
-                
-                <div>
-                  <label className="block text-sm font-medium text-slate-300 mb-2">
-                    First Loop Borrow Amount (Optional)
-                  </label>
-                  <input
-                    type="number"
-                    value={borrowAmount}
-                    onChange={(e) => setBorrowAmount(e.target.value)}
-                    className="w-full px-4 py-3 bg-slate-700 border border-slate-600 rounded-lg text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-purple-500"
-                    placeholder="Auto-calculated if empty"
-                    min="0"
-                    step="0.01"
-                    disabled={!account || isProcessing}
-                  />
-                </div>
-                
-                <div className="grid grid-cols-3 gap-2">
-                  {[100, 500, 1000].map((amount) => (
-                    <button
-                      key={amount}
-                      onClick={() => setUsdcAmount(amount.toString())}
-                      disabled={!account || isProcessing}
-                      className="px-4 py-2 bg-slate-600 hover:bg-slate-500 disabled:bg-slate-700 disabled:text-slate-500 rounded-lg text-sm font-medium transition-colors"
-                    >
-                      ${amount}
-                    </button>
-                  ))}
-                </div>
+                <svg
+                  viewBox="0 0 200 200"
+                  className="w-full h-auto"
+                  style={{
+                    transform: `rotate(${rotation}deg)`,
+                    transition: isSpinning ? 'transform 3s cubic-bezier(0.17, 0.67, 0.12, 0.99)' : 'none'
+                  }}
+                >
+                  <circle cx="100" cy="100" r="95" fill="#1F2937" stroke="#F97316" strokeWidth="3"/>
+                  {prizeTiers.map((tier, index) => {
+                    const angle = (360 / prizeTiers.length) * index;
+                    const nextAngle = (360 / prizeTiers.length) * (index + 1);
+                    const startRad = (angle - 90) * Math.PI / 180;
+                    const endRad = (nextAngle - 90) * Math.PI / 180;
+                    
+                    const x1 = 100 + 95 * Math.cos(startRad);
+                    const y1 = 100 + 95 * Math.sin(startRad);
+                    const x2 = 100 + 95 * Math.cos(endRad);
+                    const y2 = 100 + 95 * Math.sin(endRad);
+                    
+                    const midAngle = (angle + nextAngle) / 2 - 90;
+                    const midRad = midAngle * Math.PI / 180;
+                    const textX = 100 + 65 * Math.cos(midRad);
+                    const textY = 100 + 65 * Math.sin(midRad);
+                    
+                    // Format prize amount for display
+                    const displayAmount = tier.prizeAmount === "0" ? "Try Again" : `${formatNumber(tier.prizeAmount)} BBFT`;
+                    
+                    return (
+                      <g key={index}>
+                        <path
+                          d={`M 100 100 L ${x1} ${y1} A 95 95 0 0 1 ${x2} ${y2} Z`}
+                          fill={PRIZE_COLORS[index % PRIZE_COLORS.length]}
+                          stroke="#000"
+                          strokeWidth="1.5"
+                        />
+                        <text
+                          x={textX}
+                          y={textY}
+                          fill="white"
+                          fontSize="9"
+                          fontWeight="bold"
+                          textAnchor="middle"
+                          dominantBaseline="middle"
+                          transform={`rotate(${midAngle + 90}, ${textX}, ${textY})`}
+                        >
+                          <tspan x={textX} dy="-5">{displayAmount.split(' ')[0]}</tspan>
+                          <tspan x={textX} dy="10">{displayAmount.split(' ').slice(1).join(' ')}</tspan>
+                        </text>
+                      </g>
+                    );
+                  })}
+                  <circle cx="100" cy="100" r="20" fill="#F97316" stroke="#000" strokeWidth="2"/>
+                  <circle cx="100" cy="100" r="12" fill="#1F2937"/>
+                  <text x="100" y="105" fill="white" fontSize="14" fontWeight="bold" textAnchor="middle">SPIN</text>
+                </svg>
               </div>
-            </div>
 
-            {/* Wallet Balances */}
-            {account && (
-              <div className="bg-slate-800 rounded-xl p-6 border border-slate-700">
-                <div className="flex items-center mb-4">
-                  <DollarSign className="w-5 h-5 text-green-400 mr-2" />
-                  <h2 className="text-xl font-semibold">Your Balances</h2>
+              {/* Last Win Alert */}
+              {lastWin && (
+                <div className="bg-green-500/20 border border-green-500 rounded-xl p-4 mb-6 text-center animate-pulse">
+                  <p className="text-green-400 font-bold text-lg">🎉 You won {formatNumber(lastWin.amount)} BBFT!</p>
+                  <p className="text-gray-300 text-sm">Prize: {lastWin.tier}</p>
                 </div>
-                
-                <div className="space-y-3">
-                  <div className="flex justify-between items-center p-3 bg-slate-700 rounded-lg">
-                    <div className="flex items-center">
-                      <div className="w-8 h-8 bg-green-500 rounded-full flex items-center justify-center text-xs font-bold mr-3">
-                        USDC
-                      </div>
-                      <span className="text-slate-300">USD Coin</span>
-                    </div>
-                    <span className="font-semibold text-green-400">{balances.usdc}</span>
-                  </div>
-                  
-                  <div className="flex justify-between items-center p-3 bg-slate-700 rounded-lg">
-                    <div className="flex items-center">
-                      <div className="w-8 h-8 bg-pink-500 rounded-full flex items-center justify-center text-xs font-bold mr-3">
-                        PT
-                      </div>
-                      <span className="text-slate-300">PT-sUSDe</span>
-                    </div>
-                    <span className="font-semibold text-pink-400">{balances.ptSusde}</span>
-                  </div>
-                </div>
-              </div>
-            )}
+              )}
+
+              {/* Spin Button */}
+              {!account ? (
+                <button
+                  onClick={() => setShowWalletModal(true)}
+                  className="w-full bg-orange-500 hover:bg-orange-600 py-4 rounded-xl font-bold text-lg transition"
+                >
+                  Connect Wallet to Spin
+                </button>
+              ) : needsApproval ? (
+                <button
+                  onClick={approveTokens}
+                  disabled={isApproving}
+                  className="w-full bg-orange-500 hover:bg-orange-600 disabled:bg-gray-700 py-4 rounded-xl font-bold text-lg transition flex items-center justify-center gap-2"
+                >
+                  {isApproving ? (
+                    <>
+                      <Loader2 className="w-5 h-5 animate-spin" />
+                      Approving...
+                    </>
+                  ) : (
+                    <>Approve BBFT Tokens</>
+                  )}
+                </button>
+              ) : (
+                <button
+                  onClick={spinWheel}
+                  disabled={isSpinning || availableSpins === 0}
+                  className="w-full bg-orange-500 hover:bg-orange-600 disabled:bg-gray-700 disabled:cursor-not-allowed py-4 rounded-xl font-bold text-lg transition flex items-center justify-center gap-2"
+                >
+                  {isSpinning ? (
+                    <>
+                      <Loader2 className="w-5 h-5 animate-spin" />
+                      Spinning...
+                    </>
+                  ) : (
+                    <>
+                      <RefreshCw className="w-5 h-5" />
+                      SPIN NOW ({availableSpins} available)
+                    </>
+                  )}
+                </button>
+              )}
+              
+              <p className="text-center text-gray-400 text-sm mt-3">
+                💰 Costs {formatNumber(SPIN_COST)} BBFT per spin
+              </p>
+            </div>
           </div>
 
-          {/* Middle Column - Loop Progress & Estimates */}
+          {/* Sidebar */}
           <div className="space-y-6">
-
-            {/* Multi-Loop Overview */}
-            <div className="bg-slate-800 rounded-xl p-6 border border-slate-700">
-              <div className="flex items-center mb-4">
-                <Layers className="w-5 h-5 text-blue-400 mr-2" />
-                <h2 className="text-xl font-semibold">Loop Overview</h2>
-                <div className="ml-auto bg-gradient-to-r from-green-500 to-blue-500 px-3 py-1 rounded-full text-sm font-bold">
-                  {multiLoopEstimates.overallApy}% APY
-                </div>
-              </div>
-              
+            {/* Prize Odds */}
+            <div className="bg-gray-900 rounded-2xl p-6">
+              <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
+                <Trophy className="w-5 h-5 text-orange-500" />
+                Prize Odds
+              </h3>
               <div className="space-y-3">
-                {multiLoopEstimates.loops.map((loop, index) => (
-                  <div key={index} className={`p-4 rounded-lg border ${
-                    currentLoop === loop.loopNumber ? 'bg-blue-900/50 border-blue-500' :
-                    loops.find(l => l.loopNumber === loop.loopNumber) ? 'bg-green-900/50 border-green-500' :
-                    'bg-slate-700 border-slate-600'
-                  }`}>
-                    <div className="flex items-center justify-between mb-2">
-                      <div className="flex items-center space-x-3">
-                        <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold ${
-                          currentLoop === loop.loopNumber ? 'bg-blue-500 animate-pulse' :
-                          loops.find(l => l.loopNumber === loop.loopNumber) ? 'bg-green-500' :
-                          'bg-slate-600'
-                        }`}>
-                          {loops.find(l => l.loopNumber === loop.loopNumber) ? <CheckCircle className="w-4 h-4" /> : loop.loopNumber}
-                        </div>
-                        <span className="font-medium">Loop {loop.loopNumber}</span>
-                      </div>
-                      <ArrowRight className="w-4 h-4 text-slate-400" />
+                {prizeTiers.map((tier, index) => (
+                  <div key={index} className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <div 
+                        className="w-3 h-3 rounded-full" 
+                        style={{ backgroundColor: PRIZE_COLORS[index % PRIZE_COLORS.length] }}
+                      ></div>
+                      <span className="text-sm">{tier.name}</span>
                     </div>
-                    
-                    <div className="grid grid-cols-2 gap-4 text-xs">
-                      <div>
-                        <div className="text-slate-400">Input USDC</div>
-                        <div className="text-green-400 font-semibold">{loop.inputUsdc.toFixed(2)}</div>
-                      </div>
-                      <div>
-                        <div className="text-slate-400">PT-sUSDe Output</div>
-                        <div className="text-purple-400 font-semibold">{loop.estimatedPTSUSDe.toFixed(2)}</div>
-                      </div>
-                      <div>
-                        <div className="text-slate-400">Borrow Amount</div>
-                        <div className="text-yellow-400 font-semibold">{loop.actualBorrowAmount.toFixed(2)}</div>
-                      </div>
-                      <div>
-                        <div className="text-slate-400">Cumulative PT</div>
-                        <div className="text-blue-400 font-semibold">{loop.cumulativeCollateral.toFixed(2)}</div>
-                      </div>
+                    <div className="flex items-center gap-3">
+                      <span className="text-xs text-gray-400">{formatNumber(tier.prizeAmount)} BBFT</span>
+                      <span className="text-orange-500 font-bold text-sm">{tier.probability}%</span>
                     </div>
                   </div>
                 ))}
               </div>
-            </div>
-
-            {/* Current Loop Progress */}
-            {isProcessing && (
-              <div className="bg-slate-800 rounded-xl p-6 border border-slate-700">
-                <div className="flex items-center mb-4">
-                  <TrendingUp className="w-5 h-5 text-purple-400 mr-2" />
-                  <h2 className="text-xl font-semibold">Current Progress</h2>
-                  <div className="ml-auto text-sm text-slate-400">
-                    Loop {currentLoop} of {multiLoopEstimates.loops.length}
-                  </div>
-                </div>
-                
-                <div className="space-y-3">
-                  {steps.map((step, index) => (
-                    <div key={index} className="flex items-center space-x-3">
-                      <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold ${
-                        currentStep > index + 1 ? 'bg-green-500' : 
-                        currentStep === index + 1 ? 'bg-blue-500 animate-pulse' :
-                        'bg-slate-600'
-                      }`}>
-                        {currentStep > index + 1 ? <CheckCircle className="w-4 h-4" /> : step.icon}
-                      </div>
-                      <span className={`${
-                        currentStep > index + 1 ? 'text-green-400' :
-                        currentStep === index + 1 ? 'text-blue-400' :
-                        'text-slate-400'
-                      }`}>
-                        {step.name}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Execute Section */}
-            <div className="bg-slate-800 rounded-xl p-6 border border-slate-700">
-              <div className="flex items-center justify-between mb-4">
-                <div className="flex items-center">
-                  <Zap className="w-5 h-5 text-yellow-400 mr-2" />
-                  <h2 className="text-xl font-semibold">Execute Strategy</h2>
-                </div>
-                {isProcessing && (
-                  <div className="animate-spin w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full"></div>
-                )}
-              </div>
-              
-              <div className="mb-4">
-                <div className="flex items-center space-x-2">
-                  <AlertCircle className="w-4 h-4 text-blue-400" />
-                  <span className="text-sm text-slate-300">{status}</span>
-                </div>
-                {txHash && (
-                  <div className="mt-2 text-xs text-blue-400 break-all">
-                    TX: {txHash}
-                  </div>
-                )}
-              </div>
-              
-              <button
-                onClick={executeMultiLoop}
-                disabled={isProcessing || !usdcAmount || parseFloat(usdcAmount) <= 0 || !account}
-                className={`w-full py-4 rounded-lg font-semibold text-lg transition-all ${
-                  isProcessing || !usdcAmount || parseFloat(usdcAmount) <= 0 || !account
-                    ? 'bg-slate-600 text-slate-400 cursor-not-allowed'
-                    : 'bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white shadow-lg'
-                }`}
-              >
-                {isProcessing ? `Executing Loop ${currentLoop}...` : 
-                 `Execute ${multiLoopEstimates.loops.length} Loops (${multiLoopEstimates.overallApy}% APY)`}
-              </button>
-            </div>
-          </div>
-
-          {/* Right Column - Advanced Analytics */}
-          <div className="space-y-6">
-            {/* Multi-Loop Yield Analysis */}
-            <div className="bg-slate-800 rounded-xl p-6 border border-slate-700">
-              <div className="flex items-center mb-4">
-                <BarChart3 className="w-5 h-5 text-green-400 mr-2" />
-                <h2 className="text-xl font-semibold">Yield Analysis</h2>
-              </div>
-              
-              <div className="space-y-4">
-                {/* Overall Metrics */}
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="bg-gradient-to-br from-green-800 to-green-700 rounded-lg p-4 text-center">
-                    <div className="text-2xl font-bold text-green-200">{multiLoopEstimates.overallApy}%</div>
-                    <div className="text-xs text-green-300 font-medium">Total APY</div>
-                  </div>
-                  <div className="bg-gradient-to-br from-blue-800 to-blue-700 rounded-lg p-4 text-center">
-                    <div className="text-2xl font-bold text-blue-200">{multiLoopEstimates.leverageMultiplier}x</div>
-                    <div className="text-xs text-blue-300 font-medium">Leverage</div>
-                  </div>
-                </div>
-
-                {/* Position Summary */}
-                <div className="space-y-2">
-                  <h3 className="text-sm font-medium text-slate-300">Position Summary</h3>
-                  <div className="space-y-2">
-                    <div className="flex justify-between items-center p-3 bg-slate-700 rounded-lg">
-                      <span className="text-sm text-slate-300">Total PT-sUSDe</span>
-                      <span className="text-purple-400 font-semibold">{multiLoopEstimates.totalCollateral}</span>
-                    </div>
-                    <div className="flex justify-between items-center p-3 bg-slate-700 rounded-lg">
-                      <span className="text-sm text-slate-300">Total Borrowed</span>
-                      <span className="text-red-400 font-semibold">{multiLoopEstimates.totalBorrowed} USDC</span>
-                    </div>
-                    <div className="flex justify-between items-center p-3 bg-gradient-to-r from-green-900 to-blue-900 rounded-lg">
-                      <span className="text-sm text-white font-medium">Net Annual Profit</span>
-                      <span className="text-green-300 font-bold">+${multiLoopEstimates.netYieldAnnual}</span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Yield Breakdown */}
-                <div className="space-y-2">
-                  <h3 className="text-sm font-medium text-slate-300">Annual Yield Breakdown</h3>
-                  <div className="space-y-2">
-                    <div className="flex justify-between items-center p-3 bg-slate-700 rounded-lg">
-                      <span className="text-sm text-slate-300">PT Yield Earned</span>
-                      <span className="text-green-400 font-semibold">+${multiLoopEstimates.totalPtYieldAnnual}</span>
-                    </div>
-                    <div className="flex justify-between items-center p-3 bg-slate-700 rounded-lg">
-                      <span className="text-sm text-slate-300">Total Borrow Cost</span>
-                      <span className="text-red-400 font-semibold">-${multiLoopEstimates.totalBorrowCostAnnual}</span>
-                    </div>
-                  </div>
-                </div>
+              <div className="mt-4 pt-4 border-t border-gray-800 text-xs text-gray-400">
+                ⚡ Fair & Transparent<br/>
+                🔒 Verified on-chain randomness (VRF)
               </div>
             </div>
 
-            {/* APY Comparison Chart */}
-            <div className="bg-slate-800 rounded-xl p-6 border border-slate-700">
-              <div className="flex items-center mb-4">
-                <TrendingUp className="w-5 h-5 text-purple-400 mr-2" />
-                <h2 className="text-xl font-semibold">APY by Loop Count</h2>
-              </div>
-              
+            {/* Recent Winners */}
+            <div className="bg-gray-900 rounded-2xl p-6">
+              <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
+                <Trophy className="w-5 h-5 text-yellow-500" />
+                Recent Winners
+              </h3>
               <div className="space-y-3">
-                {[1, 2, 3, 4, 5].map((loops) => {
-                  const tempEstimate = calculateLoopAPY(parseFloat(usdcAmount) || 100, loops);
-                  const isActive = loops === maxLoops;
-                  
-                  return (
-                    <div key={loops} className={`flex items-center justify-between p-3 rounded-lg transition-all ${
-                      isActive ? 'bg-purple-900/50 border border-purple-500' : 'bg-slate-700 hover:bg-slate-600'
-                    }`}>
-                      <div className="flex items-center space-x-3">
-                        <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold ${
-                          isActive ? 'bg-purple-500' : 'bg-slate-600'
-                        }`}>
-                          {loops}
-                        </div>
-                        <span className={`text-sm ${isActive ? 'text-purple-300' : 'text-slate-300'}`}>
-                          {loops} Loop{loops > 1 ? 's' : ''}
-                        </span>
+                {recentWinners.length === 0 ? (
+                  <p className="text-gray-500 text-sm text-center py-4">No winners yet</p>
+                ) : (
+                  recentWinners.map((winner, index) => (
+                    <div key={index} className="flex items-center justify-between bg-gray-800 rounded-lg p-3">
+                      <div>
+                        <p className="font-mono text-sm">{formatAddress(winner.player)}</p>
+                        <p className="text-xs text-gray-400">{getTimeSince(winner.timestamp)}</p>
                       </div>
                       <div className="text-right">
-                        <div className={`font-bold ${isActive ? 'text-purple-400' : 'text-slate-400'}`}>
-                          {tempEstimate.apy}%
-                        </div>
-                        <div className="text-xs text-slate-500">
-                          {tempEstimate.leverage}x leverage
-                        </div>
+                        <p className="text-orange-500 font-bold">{formatNumber(winner.prizeAmount)} BBFT</p>
                       </div>
                     </div>
-                  );
-                })}
-              </div>
-              
-              <div className="mt-4 p-4 bg-gradient-to-r from-purple-900/50 to-pink-900/50 rounded-lg">
-                <div className="text-xs text-slate-300 mb-2">APY Improvement:</div>
-                <div className="text-lg font-bold text-purple-300">
-                  +{(parseFloat(multiLoopEstimates.overallApy) - calculateLoopAPY(parseFloat(usdcAmount) || 100, 1).apy).toFixed(1)}% 
-                  <span className="text-sm font-normal text-slate-400">vs single loop</span>
-                </div>
-              </div>
-            </div>
-
-            {/* Risk Analysis */}
-            <div className="bg-slate-800 rounded-xl p-6 border border-slate-700">
-              <div className="flex items-center mb-4">
-                <AlertCircle className="w-5 h-5 text-orange-400 mr-2" />
-                <h2 className="text-xl font-semibold">Risk Analysis</h2>
-              </div>
-              
-              <div className="space-y-4">
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="bg-slate-700 rounded-lg p-4 text-center">
-                    <div className="text-lg font-bold text-orange-400">
-                      {(yieldRates.ptSusdeImpliedApy - yieldRates.morphoBorrowApy).toFixed(1)}%
-                    </div>
-                    <div className="text-xs text-slate-400">Rate Spread</div>
-                  </div>
-                  <div className="bg-slate-700 rounded-lg p-4 text-center">
-                    <div className="text-lg font-bold text-blue-400">75%</div>
-                    <div className="text-xs text-slate-400">Max LTV</div>
-                  </div>
-                </div>
-                
-                <div className="space-y-2">
-                  <div className="flex justify-between items-center">
-                    <span className="text-sm text-slate-300">Complexity Level</span>
-                    <span className={`text-sm font-semibold ${
-                      maxLoops <= 2 ? 'text-green-400' : 
-                      maxLoops <= 3 ? 'text-yellow-400' : 'text-red-400'
-                    }`}>
-                      {maxLoops <= 2 ? 'Low' : maxLoops <= 3 ? 'Medium' : 'High'}
-                    </span>
-                  </div>
-                  <div className="flex justify-between items-center">
-                    <span className="text-sm text-slate-300">Gas Cost Est.</span>
-                    <span className="text-sm font-semibold text-blue-400">
-                      ${(multiLoopEstimates.loops.length * 25).toFixed(0)}
-                    </span>
-                  </div>
-                  <div className="flex justify-between items-center">
-                    <span className="text-sm text-slate-300">Liquidation Risk</span>
-                    <span className="text-sm font-semibold text-green-400">Low</span>
-                  </div>
-                </div>
-                
-                <div className="p-3 bg-gradient-to-r from-yellow-900/50 to-orange-900/50 rounded-lg">
-                  <div className="text-xs text-yellow-300 font-medium mb-1">⚠️ Important Notes:</div>
-                  <ul className="text-xs text-slate-300 space-y-1">
-                    <li>• Higher loops increase complexity and gas costs</li>
-                    <li>• Rate spread must remain positive for profitability</li>
-                    <li>• Monitor liquidation thresholds closely</li>
-                  </ul>
-                </div>
-              </div>
-            </div>
-
-            {/* Time-based Projections */}
-            <div className="bg-slate-800 rounded-xl p-6 border border-slate-700">
-              <div className="flex items-center mb-4">
-                <Percent className="w-5 h-5 text-cyan-400 mr-2" />
-                <h2 className="text-xl font-semibold">Yield Timeline</h2>
-              </div>
-              
-              <div className="grid grid-cols-2 gap-4">
-                <div className="bg-gradient-to-br from-emerald-800 to-emerald-700 rounded-lg p-4 text-center">
-                  <div className="text-xl font-bold text-emerald-200">
-                    ${(parseFloat(multiLoopEstimates.netYieldAnnual) / 365).toFixed(3)}
-                  </div>
-                  <div className="text-xs text-emerald-300 font-medium">Daily Yield</div>
-                  <div className="text-xs text-emerald-400 mt-1">
-                    {(parseFloat(multiLoopEstimates.overallApy) / 365).toFixed(4)}% daily
-                  </div>
-                </div>
-                <div className="bg-gradient-to-br from-cyan-800 to-cyan-700 rounded-lg p-4 text-center">
-                  <div className="text-xl font-bold text-cyan-200">
-                    ${(parseFloat(multiLoopEstimates.netYieldAnnual) / 52).toFixed(2)}
-                  </div>
-                  <div className="text-xs text-cyan-300 font-medium">Weekly Yield</div>
-                  <div className="text-xs text-cyan-400 mt-1">
-                    {(parseFloat(multiLoopEstimates.overallApy) / 52).toFixed(3)}% weekly
-                  </div>
-                </div>
-                <div className="bg-gradient-to-br from-yellow-800 to-yellow-700 rounded-lg p-4 text-center">
-                  <div className="text-xl font-bold text-yellow-200">
-                    ${(parseFloat(multiLoopEstimates.netYieldAnnual) / 12).toFixed(2)}
-                  </div>
-                  <div className="text-xs text-yellow-300 font-medium">Monthly Yield</div>
-                  <div className="text-xs text-yellow-400 mt-1">
-                    {(parseFloat(multiLoopEstimates.overallApy) / 12).toFixed(2)}% monthly
-                  </div>
-                </div>
-                <div className="bg-gradient-to-br from-green-800 to-green-700 rounded-lg p-4 text-center">
-                  <div className="text-xl font-bold text-green-200">
-                    ${multiLoopEstimates.netYieldAnnual}
-                  </div>
-                  <div className="text-xs text-green-300 font-medium">Annual Yield</div>
-                  <div className="text-xs text-green-400 mt-1">
-                    {multiLoopEstimates.overallApy}% APY
-                  </div>
-                </div>
+                  ))
+                )}
               </div>
             </div>
           </div>
         </div>
-
-        {/* Completed Loops History */}
-        {loops.length > 0 && (
-          <div className="mt-6 bg-slate-800 rounded-xl p-6 border border-slate-700">
-            <div className="flex items-center mb-4">
-              <CheckCircle className="w-5 h-5 text-green-400 mr-2" />
-              <h2 className="text-xl font-semibold">Completed Loops History</h2>
-              <div className="ml-auto bg-gradient-to-r from-green-500 to-blue-500 px-3 py-1 rounded-full text-sm font-bold">
-                {loops.length} / {multiLoopEstimates.loops.length} Complete
-              </div>
-            </div>
-            
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {loops.map((loop, index) => (
-                <div key={index} className="bg-gradient-to-br from-slate-700 to-slate-600 rounded-lg p-4">
-                  <div className="flex items-center justify-between mb-3">
-                    <div className="flex items-center space-x-2">
-                      <div className="w-6 h-6 bg-green-500 rounded-full flex items-center justify-center">
-                        <CheckCircle className="w-4 h-4" />
-                      </div>
-                      <span className="font-semibold">Loop {loop.loopNumber}</span>
-                    </div>
-                    <span className="text-xs text-slate-400">
-                      {new Date(loop.timestamp).toLocaleTimeString()}
-                    </span>
-                  </div>
-                  
-                  <div className="space-y-2 text-sm">
-                    <div className="flex justify-between">
-                      <span className="text-slate-400">Input:</span>
-                      <span className="text-green-400 font-semibold">{loop.inputUsdc.toFixed(2)} USDC</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-slate-400">PT Minted:</span>
-                      <span className="text-purple-400 font-semibold">{loop.estimatedPTSUSDe.toFixed(2)}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-slate-400">Borrowed:</span>
-                      <span className="text-yellow-400 font-semibold">{loop.actualBorrowAmount.toFixed(2)} USDC</span>
-                    </div>
-                    <div className="flex justify-between font-semibold">
-                      <span className="text-slate-300">Efficiency:</span>
-                      <span className="text-blue-400">
-                        {((loop.actualBorrowAmount / loop.inputUsdc) * 100).toFixed(1)}%
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Strategy Performance Summary */}
-        {multiLoopEstimates.loops.length > 1 && (
-          <div className="mt-6 bg-gradient-to-r from-slate-800 to-slate-700 rounded-xl p-6 border border-slate-600">
-            <div className="flex items-center mb-4">
-              <Target className="w-5 h-5 text-green-400 mr-2" />
-              <h2 className="text-xl font-semibold">Multi-Loop Strategy Performance</h2>
-              <div className="ml-auto flex items-center space-x-4">
-                <span className="text-green-400 font-bold text-2xl">{multiLoopEstimates.overallApy}% APY</span>
-                <span className="text-blue-400 font-bold text-lg">{multiLoopEstimates.leverageMultiplier}x Leverage</span>
-              </div>
-            </div>
-            
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-              <div className="bg-gradient-to-br from-green-900/50 to-emerald-900/50 rounded-lg p-4">
-                <div className="text-sm text-slate-300 mb-2">Total Position Value</div>
-                <div className="text-2xl font-bold text-green-400">
-                  ${(parseFloat(multiLoopEstimates.totalInputUsed) + parseFloat(multiLoopEstimates.totalBorrowed)).toFixed(2)}
-                </div>
-                <div className="text-xs text-slate-400 mt-1">
-                  {multiLoopEstimates.leverageMultiplier}x from ${multiLoopEstimates.totalInputUsed} initial
-                </div>
-              </div>
-              
-              <div className="bg-gradient-to-br from-purple-900/50 to-pink-900/50 rounded-lg p-4">
-                <div className="text-sm text-slate-300 mb-2">Annual Profit</div>
-                <div className="text-2xl font-bold text-purple-400">
-                  +${multiLoopEstimates.netYieldAnnual}
-                </div>
-                <div className="text-xs text-slate-400 mt-1">
-                  ${(parseFloat(multiLoopEstimates.netYieldAnnual) / 365).toFixed(3)} per day
-                </div>
-              </div>
-              
-              <div className="bg-gradient-to-br from-blue-900/50 to-cyan-900/50 rounded-lg p-4">
-                <div className="text-sm text-slate-300 mb-2">Efficiency Gain</div>
-                <div className="text-2xl font-bold text-blue-400">
-                  +{(parseFloat(multiLoopEstimates.overallApy) - calculateLoopAPY(parseFloat(usdcAmount) || 100, 1).apy).toFixed(1)}%
-                </div>
-                <div className="text-xs text-slate-400 mt-1">
-                  vs single loop strategy
-                </div>
-              </div>
-              
-              <div className="bg-gradient-to-br from-orange-900/50 to-red-900/50 rounded-lg p-4">
-                <div className="text-sm text-slate-300 mb-2">Capital Efficiency</div>
-                <div className="text-2xl font-bold text-orange-400">
-                  {((parseFloat(multiLoopEstimates.totalCollateral) / parseFloat(multiLoopEstimates.totalInputUsed)) * 100).toFixed(0)}%
-                </div>
-                <div className="text-xs text-slate-400 mt-1">
-                  PT-sUSDe per input dollar
-                </div>
-              </div>
-            </div>
-            
-            <div className="mt-6 p-4 bg-gradient-to-r from-blue-900/30 to-purple-900/30 rounded-lg">
-              <div className="text-sm font-medium text-blue-300 mb-2">💡 Strategy Insights:</div>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm text-slate-300">
-                <ul className="space-y-1">
-                  <li>• Each loop compounds your yield exposure</li>
-                  <li>• Borrowing capacity decreases with each iteration</li>
-                  <li>• Total APY increases significantly vs single loop</li>
-                </ul>
-                <ul className="space-y-1">
-                  <li>• Gas costs scale linearly with loop count</li>
-                  <li>• Rate spread sustainability is critical</li>
-                  <li>• Position becomes more complex to unwind</li>
-                </ul>
-              </div>
-            </div>
-          </div>
-        )}
       </div>
     </div>
   );
-
-  // Helper function to calculate APY for different loop counts
-  function calculateLoopAPY(inputAmount, loopCount) {
-    let totalCollateral = 0;
-    let totalBorrowed = 0;
-    let availableUSDC = inputAmount;
-
-    for (let i = 0; i < loopCount && availableUSDC > 1; i++) {
-      const estimatedUSDe = availableUSDC * (1 - 0.005);
-      const estimatedSUSDe = estimatedUSDe;
-      const estimatedPTSUSDe = estimatedSUSDe * (1 - 0.01);
-      const maxBorrowUSDC = estimatedPTSUSDe * 0.75;
-      const actualBorrowAmount = Math.min(maxBorrowUSDC, availableUSDC * 0.8);
-
-      totalCollateral += estimatedPTSUSDe;
-      totalBorrowed += actualBorrowAmount;
-      availableUSDC = actualBorrowAmount;
-
-      if (actualBorrowAmount < 5) break;
-    }
-
-    const totalPtYieldAnnual = (totalCollateral * yieldRates.ptSusdeImpliedApy) / 100;
-    const totalBorrowCostAnnual = (totalBorrowed * yieldRates.morphoBorrowApy) / 100;
-    const netYieldAnnual = totalPtYieldAnnual - totalBorrowCostAnnual;
-    const apy = inputAmount > 0 ? (netYieldAnnual / inputAmount) * 100 : 0;
-    const leverage = inputAmount > 0 ? (inputAmount + totalBorrowed) / inputAmount : 1;
-
-    return {
-      apy: apy.toFixed(1),
-      leverage: leverage.toFixed(2)
-    };
-  }
-};
-
-export default App;
-                  
+}

@@ -1,20 +1,25 @@
 import React, { useState, useEffect } from 'react';
 import { ethers } from 'ethers';
-import { Loader2, Wallet, TrendingUp, Trophy, RefreshCw, X, Plus, Minus } from 'lucide-react';
+import { Loader2, Wallet, TrendingUp, Trophy, RefreshCw, X, Plus, Minus, Clock } from 'lucide-react';
 
-const CONTRACT_ADDRESS = "0xAb69D28E0Dce53E6CB50242D11E4A2788b6Db54F"; //"0x97637d50523514510587D2AEBC3dc13F00D4E74b";
-const TOKEN_ADDRESS = "0x900186aa7B0CbDe4C43AeE8Db110d51b68DEe3B1";
+const CONTRACT_ADDRESS = "0x0b3330d9D5806E00910c870ef4C4201C1105Ae5F";
+const TOKEN_ADDRESS = "0xfB69e2d3d673A8DB9Fa74ffc036A8Cf641255769";
+//const WALLETCONNECT_PROJECT_ID = "905f16b4b770b18620f2739ed4757d0c";
+
 
 const CONTRACT_ABI = [
   "function spin() external returns (uint256)",
   "function deposit(uint256 amount) external",
   "function withdraw(uint256 amount) external",
-  "function getPlayerSpinInfo(address player) external view returns (uint256 depositedAmount, uint256 dailySpinsAllowance, uint256 totalSpinsAllowance, uint256 remainingDailySpins, uint256 remainingTotalSpins)",
-  "function getPlayerUsageStats(address player) external view returns (uint256 dailySpinsUsed, uint256 totalSpinsUsed, uint256 totalSpins, uint256 totalWinnings, uint256 lastSpinTime)",
-  "function getRecentWinners(uint256 count) external view returns (tuple(address player, uint256 prizeAmount, uint256 tierIndex, uint256 timestamp, bytes32 requestId)[])",
+  "function getPlayerSpinInfo(address player) external view returns (uint256 depositedAmount, uint256 totalSpinsAllowance, uint256 availableSpins, uint256 totalSpinsUsed)",
+  "function getPlayerUsageStats(address player) external view returns (uint256 totalSpins, uint256 totalWinnings, uint256 lastSpinTime)",
+  "function getRecentWinners(uint256 count) external view returns (tuple(address player, uint256 prizeAmount, uint256 feeAmount, uint256 tierIndex, uint256 timestamp, bytes32 requestId)[])",
   "function getContractBalance() external view returns (uint256)",
   "function getAllPrizeTiers() external view returns (tuple(uint256 prizeAmount, uint256 probability, string name)[])",
-  "event SpinCompleted(address indexed player, uint256 indexed spinId, uint256 tierIndex, uint256 prizeAmount, uint256 timestamp)"
+  "function getTotalFeesCollected() external view returns (uint256)",
+  "function getFeeRecipient() external view returns (address)",
+  "function getSpinCost() external view returns (uint256)",
+  "event SpinCompleted(address indexed player, uint256 indexed spinId, uint256 tierIndex, uint256 prizeAmount, uint256 feeAmount, uint256 timestamp)"
 ];
 
 const TOKEN_ABI = [
@@ -25,6 +30,9 @@ const TOKEN_ABI = [
 
 const PRIZE_COLORS = ['#3B82F6', '#A855F7', '#EC4899', '#10B981', '#F59E0B', '#6B7280'];
 const TIER_AMOUNT = "10000";
+
+// WalletConnect configuration
+const WALLETCONNECT_PROJECT_ID = "YOUR_WALLETCONNECT_PROJECT_ID"; // Get from https://cloud.walletconnect.com
 
 // WalletConnect Modal Component
 function WalletModal({ isOpen, onClose, onSelectWallet }) {
@@ -66,6 +74,18 @@ function WalletModal({ isOpen, onClose, onSelectWallet }) {
               <p className="text-sm text-gray-400">Scan with mobile wallet</p>
             </div>
           </button>
+        </div>
+
+        <div className="mt-4 p-3 bg-gray-800 rounded-lg text-xs text-gray-400">
+          💡 <strong>WalletConnect Setup:</strong> Get your project ID from{' '}
+          <a 
+            href="https://cloud.walletconnect.com" 
+            target="_blank" 
+            rel="noopener noreferrer"
+            className="text-blue-400 hover:underline"
+          >
+            WalletConnect Cloud
+          </a>
         </div>
       </div>
     </div>
@@ -195,11 +215,12 @@ function DepositModal({ isOpen, onClose, onDeposit, onWithdraw, balance, deposit
           </div>
 
           <div className="bg-gray-800 rounded-xl p-4 text-sm">
-            <p className="text-gray-400 mb-2">💡 Spin Allocation:</p>
+            <p className="text-gray-400 mb-2">💡 How Spins Work:</p>
             <ul className="space-y-1 text-gray-300">
-              <li>• 10k BBFT = 3 spins/day (10 total)</li>
-              <li>• 20k BBFT = 6 spins/day (20 total)</li>
-              <li>• 30k BBFT = 9 spins/day (30 total)</li>
+              <li>• 10k BBFT = 5 spins</li>
+              <li>• Each spin costs {formatNumber(spinCost)} BBFT from your deposit</li>
+              <li>• Winnings have a 1% fee</li>
+              <li>• Withdraw unused deposit anytime!</li>
             </ul>
           </div>
         </div>
@@ -214,17 +235,17 @@ export default function BabyBigFiveSpin() {
   const [account, setAccount] = useState('');
   const [contract, setContract] = useState(null);
   const [tokenContract, setTokenContract] = useState(null);
+  const [wcProvider, setWcProvider] = useState(null);
   
   const [balance, setBalance] = useState('0');
   const [depositedAmount, setDepositedAmount] = useState('0');
   const [contractBalance, setContractBalance] = useState('0');
+  const [spinCost, setSpinCost] = useState('2000');
+  const [accumulatedFees, setAccumulatedFees] = useState('0');
   const [playerInfo, setPlayerInfo] = useState({
-    dailySpinsAllowance: 0,
     totalSpinsAllowance: 0,
-    dailySpinsUsed: 0,
+    availableSpins: 0,
     totalSpinsUsed: 0,
-    remainingDailySpins: 0,
-    remainingTotalSpins: 0,
     totalWinnings: '0'
   });
   const [recentWinners, setRecentWinners] = useState([]);
@@ -251,7 +272,6 @@ export default function BabyBigFiveSpin() {
       const web3Signer = web3Provider.getSigner();
       const address = await web3Signer.getAddress();
 
-      // Get network info
       const network = await web3Provider.getNetwork();
       console.log('Connected to network:', network.name, 'Chain ID:', network.chainId);
 
@@ -259,7 +279,6 @@ export default function BabyBigFiveSpin() {
       setSigner(web3Signer);
       setAccount(address);
 
-      // Check if addresses are set
       if (CONTRACT_ADDRESS === "YOUR_CONTRACT_ADDRESS_HERE" || TOKEN_ADDRESS === "YOUR_BBFT_TOKEN_ADDRESS_HERE") {
         alert('⚠️ Please set CONTRACT_ADDRESS and TOKEN_ADDRESS in the code first!');
         setShowWalletModal(false);
@@ -272,7 +291,6 @@ export default function BabyBigFiveSpin() {
       setContract(gameContract);
       setTokenContract(token);
 
-      // Try to load data with better error handling
       try {
         await loadData(token, gameContract, address);
       } catch (loadError) {
@@ -283,17 +301,96 @@ export default function BabyBigFiveSpin() {
       setShowWalletModal(false);
     } catch (error) {
       console.error('Error connecting MetaMask:', error);
-      if (error.code === -32603) {
-        alert('MetaMask RPC Error: Please check your network connection or try switching to a different RPC endpoint in MetaMask settings.');
-      } else {
-        alert('Failed to connect MetaMask: ' + (error.message || 'Unknown error'));
-      }
+      alert('Failed to connect MetaMask: ' + (error.message || 'Unknown error'));
     }
   };
 
   // Connect with WalletConnect
   const connectWalletConnect = async () => {
-    alert('WalletConnect integration requires @walletconnect/ethereum-provider package. For now, please use MetaMask.');
+    try {
+      // Dynamic import for WalletConnect
+      const EthereumProvider = (await import('@walletconnect/ethereum-provider')).default;
+      
+      // Check if project ID is set
+      if (WALLETCONNECT_PROJECT_ID === "YOUR_WALLETCONNECT_PROJECT_ID") {
+        alert('⚠️ Please set WALLETCONNECT_PROJECT_ID in the code!\n\nGet your free project ID from: https://cloud.walletconnect.com');
+        return;
+      }
+
+      // Initialize WalletConnect provider
+      const walletConnectProvider = await EthereumProvider.init({
+        projectId: WALLETCONNECT_PROJECT_ID,
+        chains: [1], // Ethereum mainnet - adjust based on your network
+        showQrModal: true,
+        qrModalOptions: {
+          themeMode: 'dark'
+        }
+      });
+
+      // Enable session (triggers QR Code modal)
+      await walletConnectProvider.enable();
+
+      // Create ethers provider
+      const web3Provider = new ethers.providers.Web3Provider(walletConnectProvider);
+      const web3Signer = web3Provider.getSigner();
+      const address = await web3Signer.getAddress();
+
+      console.log('WalletConnect connected:', address);
+
+      setWcProvider(walletConnectProvider);
+      setProvider(web3Provider);
+      setSigner(web3Signer);
+      setAccount(address);
+
+      if (CONTRACT_ADDRESS === "YOUR_CONTRACT_ADDRESS_HERE" || TOKEN_ADDRESS === "YOUR_BBFT_TOKEN_ADDRESS_HERE") {
+        alert('⚠️ Please set CONTRACT_ADDRESS and TOKEN_ADDRESS in the code first!');
+        setShowWalletModal(false);
+        return;
+      }
+
+      const gameContract = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, web3Signer);
+      const token = new ethers.Contract(TOKEN_ADDRESS, TOKEN_ABI, web3Signer);
+      
+      setContract(gameContract);
+      setTokenContract(token);
+
+      try {
+        await loadData(token, gameContract, address);
+      } catch (loadError) {
+        console.error('Error loading initial data:', loadError);
+        alert('Connected to wallet, but could not load contract data.');
+      }
+
+      setShowWalletModal(false);
+
+      // Listen for disconnect
+      walletConnectProvider.on('disconnect', () => {
+        console.log('WalletConnect disconnected');
+        disconnectWallet();
+      });
+
+    } catch (error) {
+      console.error('Error connecting WalletConnect:', error);
+      
+      if (error.message.includes('Cannot find module')) {
+        alert('WalletConnect package not found. To use WalletConnect:\n\n1. Install: npm install @walletconnect/ethereum-provider\n2. Get project ID from: https://cloud.walletconnect.com\n3. Set WALLETCONNECT_PROJECT_ID in the code\n\nFor now, please use MetaMask.');
+      } else {
+        alert('Failed to connect WalletConnect: ' + (error.message || 'Unknown error'));
+      }
+    }
+  };
+
+  // Disconnect wallet
+  const disconnectWallet = () => {
+    if (wcProvider) {
+      wcProvider.disconnect();
+    }
+    setWcProvider(null);
+    setProvider(null);
+    setSigner(null);
+    setAccount('');
+    setContract(null);
+    setTokenContract(null);
   };
 
   // Handle wallet selection
@@ -308,7 +405,6 @@ export default function BabyBigFiveSpin() {
   // Load all contract data
   const loadData = async (token, gameContract, address) => {
     try {
-      // Load data in smaller chunks to avoid overwhelming the RPC
       const [bal, allowance] = await Promise.all([
         token.balanceOf(address).catch(err => {
           console.error('Error fetching balance:', err);
@@ -326,23 +422,19 @@ export default function BabyBigFiveSpin() {
       const allowanceFormatted = ethers.utils.formatEther(allowance);
       setNeedsApproval(parseFloat(allowanceFormatted) < 10000);
 
-      // Load contract data
       const [spinInfo, usageStats, winners, tiers, contractBal] = await Promise.all([
         gameContract.getPlayerSpinInfo(address).catch(err => {
           console.error('Error fetching spin info:', err);
           return {
             depositedAmount: ethers.BigNumber.from(0),
-            dailySpinsAllowance: ethers.BigNumber.from(0),
             totalSpinsAllowance: ethers.BigNumber.from(0),
-            remainingDailySpins: ethers.BigNumber.from(0),
-            remainingTotalSpins: ethers.BigNumber.from(0)
+            availableSpins: ethers.BigNumber.from(0),
+            totalSpinsUsed: ethers.BigNumber.from(0)
           };
         }),
         gameContract.getPlayerUsageStats(address).catch(err => {
           console.error('Error fetching usage stats:', err);
           return {
-            dailySpinsUsed: ethers.BigNumber.from(0),
-            totalSpinsUsed: ethers.BigNumber.from(0),
             totalSpins: ethers.BigNumber.from(0),
             totalWinnings: ethers.BigNumber.from(0),
             lastSpinTime: ethers.BigNumber.from(0)
@@ -369,18 +461,16 @@ export default function BabyBigFiveSpin() {
       setContractBalance(contractBalFormatted);
 
       setPlayerInfo({
-        dailySpinsAllowance: spinInfo.dailySpinsAllowance.toNumber(),
         totalSpinsAllowance: spinInfo.totalSpinsAllowance.toNumber(),
-        dailySpinsUsed: usageStats.dailySpinsUsed.toNumber(),
-        totalSpinsUsed: usageStats.totalSpinsUsed.toNumber(),
-        remainingDailySpins: spinInfo.remainingDailySpins.toNumber(),
-        remainingTotalSpins: spinInfo.remainingTotalSpins.toNumber(),
+        availableSpins: spinInfo.availableSpins.toNumber(),
+        totalSpinsUsed: spinInfo.totalSpinsUsed.toNumber(),
         totalWinnings: ethers.utils.formatEther(usageStats.totalWinnings)
       });
 
       const formattedWinners = winners.map(w => ({
         player: w.player,
         prizeAmount: ethers.utils.formatEther(w.prizeAmount),
+        feeAmount: ethers.utils.formatEther(w.feeAmount),
         tierIndex: w.tierIndex,
         timestamp: new Date(w.timestamp.toNumber() * 1000)
       }));
@@ -393,30 +483,19 @@ export default function BabyBigFiveSpin() {
       }));
       setPrizeTiers(formattedTiers);
 
+      // Get spin cost and accumulated fees
+      try {
+        const cost = await gameContract.getSpinCost();
+        setSpinCost(ethers.utils.formatEther(cost));
+        
+        const fees = await gameContract.getAccumulatedFees();
+        setAccumulatedFees(ethers.utils.formatEther(fees));
+      } catch (err) {
+        console.error('Error fetching spin cost/fees:', err);
+      }
+
     } catch (error) {
       console.error('Error loading data:', error);
-      // Don't throw, just log - partial data is better than no data
-    }
-  };
-
-  // Approve token spending
-  const approveTokens = async () => {
-    if (!tokenContract) return;
-    
-    setIsApproving(true);
-    try {
-      const tx = await tokenContract.approve(
-        CONTRACT_ADDRESS,
-        ethers.constants.MaxUint256
-      );
-      await tx.wait();
-      setNeedsApproval(false);
-      // alert('Approval successful!');
-    } catch (error) {
-      console.error('Error approving:', error);
-      // alert('Approval failed');
-    } finally {
-      setIsApproving(false);
     }
   };
 
@@ -425,32 +504,29 @@ export default function BabyBigFiveSpin() {
     if (!contract || !tokenContract) return;
     
     try {
-      // Check current allowance
       const currentAllowance = await tokenContract.allowance(account, CONTRACT_ADDRESS);
       const depositAmount = ethers.utils.parseEther(amount);
       
-      // If allowance is insufficient, request approval first
       if (currentAllowance.lt(depositAmount)) {
-        // alert('First, you need to approve the contract to spend your tokens.');
+        alert('First, you need to approve the contract to spend your tokens.');
         const approveTx = await tokenContract.approve(CONTRACT_ADDRESS, ethers.constants.MaxUint256);
-        // alert('Approving... Please wait for confirmation.');
+        alert('Approving... Please wait for confirmation.');
         await approveTx.wait();
-        // alert('Approval successful! Now depositing...');
+        alert('Approval successful! Now depositing...');
       }
       
-      // Now deposit
       const tx = await contract.deposit(depositAmount);
-      // alert('Depositing... Please wait for confirmation.');
+      alert('Depositing... Please wait for confirmation.');
       await tx.wait();
       await loadData(tokenContract, contract, account);
       setShowDepositModal(false);
-      // alert('Deposit successful! You can now spin.');
+      alert('Deposit successful! You can now spin.');
     } catch (error) {
       console.error('Error depositing:', error);
       if (error.code === 'ACTION_REJECTED' || error.code === 4001) {
-        // alert('Transaction cancelled by user.');
+        alert('Transaction cancelled by user.');
       } else {
-        // alert('Deposit failed: ' + (error.reason || error.message));
+        alert('Deposit failed: ' + (error.reason || error.message));
       }
     }
   };
@@ -464,10 +540,10 @@ export default function BabyBigFiveSpin() {
       await tx.wait();
       await loadData(tokenContract, contract, account);
       setShowDepositModal(false);
-      // alert('Withdrawal successful!');
+      alert('Withdrawal successful!');
     } catch (error) {
       console.error('Error withdrawing:', error);
-      // alert('Withdrawal failed: ' + (error.reason || error.message));
+      alert('Withdrawal failed: ' + (error.reason || error.message));
     }
   };
 
@@ -570,22 +646,23 @@ export default function BabyBigFiveSpin() {
             <div className="bg-gray-900 rounded-xl p-4 font-mono text-sm space-y-2">
               <p className="text-gray-400">const CONTRACT_ADDRESS = "<span className="text-orange-500">YOUR_DEPLOYED_CONTRACT_ADDRESS</span>";</p>
               <p className="text-gray-400">const TOKEN_ADDRESS = "<span className="text-orange-500">YOUR_BBFT_TOKEN_ADDRESS</span>";</p>
+              <p className="text-gray-400">const WALLETCONNECT_PROJECT_ID = "<span className="text-orange-500">YOUR_PROJECT_ID</span>";</p>
             </div>
             <p className="text-gray-400 text-sm mt-4">
-              💡 Deploy the contract first, then update these addresses to connect to your game.
+              💡 Get WalletConnect project ID from: <a href="https://cloud.walletconnect.com" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">cloud.walletconnect.com</a>
             </p>
           </div>
         )}
 
         {/* Header */}
-        <div className="flex items-center justify-between mb-8">
+        <div className="flex items-center justify-between mb-8 flex-wrap gap-4">
           <div className="flex items-center gap-3">
             <div className="w-12 h-12 bg-orange-500 rounded-xl flex items-center justify-center">
               <TrendingUp className="w-7 h-7" />
             </div>
             <div>
               <h1 className="text-2xl font-bold">Baby Big Five Spin</h1>
-              <p className="text-sm text-gray-400">Win BFT</p>
+              <p className="text-sm text-gray-400">Win BBFT Tokens</p>
             </div>
           </div>
           
@@ -598,9 +675,17 @@ export default function BabyBigFiveSpin() {
               Connect Wallet
             </button>
           ) : (
-            <div className="flex items-center gap-2 bg-gray-900 px-4 py-2 rounded-xl">
-              <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-              <span className="font-mono">{formatAddress(account)}</span>
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2 bg-gray-900 px-4 py-2 rounded-xl">
+                <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+                <span className="font-mono">{formatAddress(account)}</span>
+              </div>
+              <button
+                onClick={disconnectWallet}
+                className="px-4 py-2 bg-gray-800 hover:bg-gray-700 rounded-xl text-sm transition"
+              >
+                Disconnect
+              </button>
             </div>
           )}
         </div>
@@ -627,10 +712,10 @@ export default function BabyBigFiveSpin() {
           <div className="bg-gray-900 rounded-2xl p-6">
             <p className="text-gray-400 text-sm mb-1">Spins Available</p>
             <p className="text-3xl font-bold text-green-500">
-              {playerInfo.remainingDailySpins}/{playerInfo.dailySpinsAllowance}
+              {playerInfo.availableSpins}
             </p>
             <p className="text-gray-500 text-xs mt-1">
-              Total: {playerInfo.remainingTotalSpins}/{playerInfo.totalSpinsAllowance}
+              Total: {playerInfo.totalSpinsAllowance - playerInfo.totalSpinsUsed}/{playerInfo.totalSpinsAllowance}
             </p>
           </div>
 
@@ -733,25 +818,10 @@ export default function BabyBigFiveSpin() {
                 >
                   Deposit 10k BBFT to Play
                 </button>
-              ) : needsApproval ? (
-                <button
-                  onClick={approveTokens}
-                  disabled={isApproving}
-                  className="w-full bg-orange-500 hover:bg-orange-600 disabled:bg-gray-700 py-4 rounded-xl font-bold text-lg transition flex items-center justify-center gap-2"
-                >
-                  {isApproving ? (
-                    <>
-                      <Loader2 className="w-5 h-5 animate-spin" />
-                      Approving...
-                    </>
-                  ) : (
-                    <>Approve BBFT Tokens</>
-                  )}
-                </button>
               ) : (
                 <button
                   onClick={spinWheel}
-                  disabled={isSpinning || playerInfo.remainingDailySpins === 0}
+                  disabled={isSpinning || playerInfo.availableSpins === 0}
                   className="w-full bg-orange-500 hover:bg-orange-600 disabled:bg-gray-700 disabled:cursor-not-allowed py-4 rounded-xl font-bold text-lg transition flex items-center justify-center gap-2"
                 >
                   {isSpinning ? (
@@ -759,20 +829,19 @@ export default function BabyBigFiveSpin() {
                       <Loader2 className="w-5 h-5 animate-spin" />
                       Spinning...
                     </>
-                  ) : playerInfo.remainingDailySpins === 0 ? (
-                    <>No Daily Spins Remaining</>
+                  ) : playerInfo.availableSpins === 0 ? (
+                    <>No Spins Remaining - Deposit More!</>
                   ) : (
                     <>
                       <RefreshCw className="w-5 h-5" />
-                      SPIN NOW ({playerInfo.remainingDailySpins} left today)
+                      SPIN NOW ({playerInfo.availableSpins} spins left)
                     </>
                   )}
                 </button>
               )}
               
               <p className="text-center text-gray-400 text-sm mt-3">
-                💰 Daily Spins: {playerInfo.remainingDailySpins}/{playerInfo.dailySpinsAllowance} | 
-                Total: {playerInfo.remainingTotalSpins}/{playerInfo.totalSpinsAllowance}
+                💰 Each spin costs {formatNumber(spinCost)} BBFT | 1% fee on winnings
               </p>
             </div>
           </div>
@@ -804,7 +873,7 @@ export default function BabyBigFiveSpin() {
               </div>
               <div className="mt-4 pt-4 border-t border-gray-800 text-xs text-gray-400">
                 ⚡ Fair & Transparent<br/>
-                🔒 Verified on-chain randomness (VRF)
+                🔒 On-chain randomness
               </div>
             </div>
 
@@ -812,31 +881,31 @@ export default function BabyBigFiveSpin() {
             <div className="bg-gray-900 rounded-2xl p-6">
               <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
                 <Wallet className="w-5 h-5 text-green-500" />
-                Spin Tiers
+                How It Works
               </h3>
               <div className="space-y-3 text-sm">
                 <div className="bg-gray-800 rounded-lg p-3">
                   <div className="flex justify-between items-center mb-1">
-                    <span className="text-gray-400">10,000 BBFT</span>
-                    <span className="text-green-500 font-bold">Tier 1</span>
+                    <span className="text-gray-400">Deposit 10k BBFT</span>
+                    <span className="text-green-500 font-bold">5 Spins</span>
                   </div>
-                  <p className="text-xs text-gray-500">3 spins/day • 10 total</p>
+                  <p className="text-xs text-gray-500">Each spin costs {formatNumber(spinCost)} BBFT</p>
                 </div>
                 
                 <div className="bg-gray-800 rounded-lg p-3">
                   <div className="flex justify-between items-center mb-1">
-                    <span className="text-gray-400">20,000 BBFT</span>
-                    <span className="text-green-500 font-bold">Tier 2</span>
+                    <span className="text-gray-400">Deposit 20k BBFT</span>
+                    <span className="text-green-500 font-bold">10 Spins</span>
                   </div>
-                  <p className="text-xs text-gray-500">6 spins/day • 20 total</p>
+                  <p className="text-xs text-gray-500">Deposit reduces as you spin</p>
                 </div>
                 
                 <div className="bg-gray-800 rounded-lg p-3">
                   <div className="flex justify-between items-center mb-1">
-                    <span className="text-gray-400">30,000 BBFT</span>
-                    <span className="text-green-500 font-bold">Tier 3</span>
+                    <span className="text-gray-400">Win Prizes</span>
+                    <span className="text-yellow-500 font-bold">1% Fee</span>
                   </div>
-                  <p className="text-xs text-gray-500">9 spins/day • 30 total</p>
+                  <p className="text-xs text-gray-500">Up to 5,000 BBFT per spin!</p>
                 </div>
               </div>
               
@@ -856,7 +925,7 @@ export default function BabyBigFiveSpin() {
               </h3>
               <div className="space-y-3">
                 {recentWinners.length === 0 ? (
-                  <p className="text-gray-500 text-sm text-center py-4">No winners yet</p>
+                  <p className="text-gray-500 text-sm text-center py-4">No winners yet. Be the first! 🎉</p>
                 ) : (
                   recentWinners.map((winner, index) => (
                     <div key={index} className="flex items-center justify-between bg-gray-800 rounded-lg p-3">
@@ -878,6 +947,28 @@ export default function BabyBigFiveSpin() {
               <h3 className="text-lg font-bold mb-2">Prize Pool</h3>
               <p className="text-3xl font-bold text-blue-500">{formatNumber(contractBalance)}</p>
               <p className="text-xs text-gray-400 mt-1">BBFT available for prizes</p>
+            </div>
+          </div>
+        </div>
+
+        {/* Instructions Footer */}
+        <div className="mt-8 bg-gray-900 rounded-2xl p-6">
+          <h3 className="text-lg font-bold mb-4">🚀 Quick Start Guide</h3>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="bg-gray-800 rounded-xl p-4">
+              <div className="text-2xl mb-2">1️⃣</div>
+              <h4 className="font-semibold mb-1">Connect Wallet</h4>
+              <p className="text-sm text-gray-400">Use MetaMask or WalletConnect to connect your wallet</p>
+            </div>
+            <div className="bg-gray-800 rounded-xl p-4">
+              <div className="text-2xl mb-2">2️⃣</div>
+              <h4 className="font-semibold mb-1">Deposit BBFT</h4>
+              <p className="text-sm text-gray-400">Deposit 10k BBFT = 5 spins. Each spin costs {formatNumber(spinCost)} BBFT from your deposit</p>
+            </div>
+            <div className="bg-gray-800 rounded-xl p-4">
+              <div className="text-2xl mb-2">3️⃣</div>
+              <h4 className="font-semibold mb-1">Spin & Win</h4>
+              <p className="text-sm text-gray-400">Click SPIN NOW and win up to 5,000 BBFT!</p>
             </div>
           </div>
         </div>
