@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { ethers } from 'ethers';
 import { Loader2, Wallet, Trophy, RefreshCw, X, Plus, Minus, ExternalLink } from 'lucide-react';
 
-const CONTRACT_ADDRESS = "0xE1A557c7fec786E4404d0345B5D1a2ABeA66A4b0";
+const CONTRACT_ADDRESS = "0x4227FB372Ce815D8F14259bCf44bcf5937B489bc";
 const TOKEN_ADDRESS = "0xfB69e2d3d673A8DB9Fa74ffc036A8Cf641255769";
 const WALLETCONNECT_PROJECT_ID = "905f16b4b770b18620f2739ed4757d0c";
 const BSC_CHAIN_ID = 56;
@@ -26,13 +26,13 @@ const CONTRACT_ABI = [
   "function withdraw(uint256 amount) external",
   "function getPlayerSpinInfo(address player) external view returns (uint256 depositedAmount, uint256 totalSpinsAllowance, uint256 availableSpins, uint256 totalSpinsUsed)",
   "function getPlayerUsageStats(address player) external view returns (uint256 totalSpins, uint256 totalWinnings, uint256 lastSpinTime)",
-  "function getRecentWinners(uint256 count) external view returns (tuple(address player, uint256 prizeAmount, uint256 feeAmount, uint256 tierIndex, uint256 timestamp, bytes32 requestId)[])",
+  "function getRecentWinners(uint256 count) external view returns (tuple(address player, uint256 prizeAmount, uint256 feeAmount, uint256 tierIndex, uint256 timestamp, bytes32 requestId, uint256 randomSeed)[])",  // Added randomSeed here
   "function getContractBalance() external view returns (uint256)",
   "function getAllPrizeTiers() external view returns (tuple(uint256 prizeAmount, uint256 probability, string name)[])",
   "function getTotalFeesCollected() external view returns (uint256)",
   "function getTreasury() external view returns (address)",
   "function getSpinCost() external view returns (uint256)",
-  "event SpinCompleted(address indexed player, uint256 indexed spinId, uint256 tierIndex, uint256 prizeAmount, uint256 feeAmount, uint256 timestamp)"
+  "event SpinCompleted(address indexed player, uint256 indexed spinId, uint256 tierIndex, uint256 prizeAmount, uint256 feeAmount, uint256 timestamp, uint256 randomSeed)"  // Added randomSeed here
 ];
 
 const TOKEN_ABI = [
@@ -162,6 +162,7 @@ export default function BabyBigFiveSpin() {
   const [lastWin, setLastWin] = useState(null);
   const [needsApproval, setNeedsApproval] = useState(true);
   const [showWalletModal, setShowWalletModal] = useState(false);
+  const [bbftPrice, setBbftPrice] = useState(0);
   const [showDepositModal, setShowDepositModal] = useState(false);
 
   // Helper to detect mobile device
@@ -416,6 +417,26 @@ export default function BabyBigFiveSpin() {
     else if (w === 'trustwallet') connectTrustWallet();
     else connectWalletConnect();
   };
+
+  // Fetch BBFT price from PancakeSwap API
+  const fetchBbftPrice = async () => {
+    try {
+      const response = await fetch(`https://api.pancakeswap.info/api/v2/tokens/${TOKEN_ADDRESS}`);
+      const data = await response.json();
+      if (data.data?.price) {
+        setBbftPrice(parseFloat(data.data.price) || 0);
+      }
+    } catch {
+      // Silently fail - price display will show $0
+    }
+  };
+
+  // Fetch price on mount and refresh every 60 seconds
+  useEffect(() => {
+    fetchBbftPrice();
+    const priceInterval = setInterval(fetchBbftPrice, 60000);
+    return () => clearInterval(priceInterval);
+  }, []);
 
   const loadData = async (token, gameContract, address, web3Provider = provider) => {
     try {
@@ -673,6 +694,7 @@ export default function BabyBigFiveSpin() {
             <p className="text-blue-300 text-sm mb-1">🏆 Prize Pool</p>
             <p className="text-4xl font-bold">{formatNumber(contractBalance)}</p>
             <p className="text-blue-300 text-xs mt-1">BBFT available</p>
+            {bbftPrice > 0 && <p className="text-blue-200 text-sm mt-1">≈ ${formatNumber(parseFloat(contractBalance) * bbftPrice)} USD</p>}
           </div>
           <a href={BUY_TOKEN_URL} target="_blank" rel="noopener noreferrer" className="bg-gradient-to-r from-green-900 to-green-800 rounded-2xl p-6 border border-green-700 hover:from-green-800 hover:to-green-700 transition group">
             <p className="text-green-300 text-sm mb-1">💰 Buy BBFT</p>
