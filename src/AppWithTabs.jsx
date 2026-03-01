@@ -3,18 +3,20 @@ import { WalletProvider } from './context/WalletContext';
 import Header from './components/Header';
 import TabNavigation from './components/TabNavigation';
 import SweepstakeGame from './games/SweepstakeGame';
+import Sweepstakev2 from './games/Sweepstake_game';
 
 // Import the legacy spin game (current App.jsx)
 import SpinGameLegacy from './games/SpinGame_Legacy';
 
 const TABS = [
-  { id: 'spin', label: 'Spin Game', icon: '🎰' },
-  { id: 'sweepstake', label: 'Sweepstakes', icon: '🎫' }
+  { id: 'spin', label: 'Spin To Win', icon: '🎰' },
+  // { id: 'sweepstake', label: 'Sweepstakes', icon: '🎫' },
+  {id:"Sweepstake", label:"Sweepstakes", icon:"🎟️"}
 ];
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('spin');
-  const [tokenBalance, setTokenBalance] = useState(0);
+  const tokenBalance = useState(0);
 
   return (
     <WalletProvider>
@@ -25,7 +27,8 @@ export default function App() {
 
           {/* Render active game */}
           {activeTab === 'spin' && <SpinGameLegacy />}
-          {activeTab === 'sweepstake' && <SweepstakeGame />}
+          {/* {activeTab === 'sweepstake' && <SweepstakeGame />} */}
+          {activeTab === 'Sweepstake' && <Sweepstakev2 />}
         </div>
       </div>
     </WalletProvider>
