@@ -146,19 +146,19 @@ export function Sweepstakev2() {
       </div>
 
       {/* User Stats Row */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
         <div className="bg-[#1a1f2e] border border-[#2a3142] rounded-xl p-5">
           <div className="text-gray-400 text-sm mb-1">Your Tickets</div>
           <div className="text-2xl font-bold text-white">{myTickets.length}</div>
           <div className="text-gray-500 text-sm">this round</div>
         </div>
-        <div className="bg-[#1a1f2e] border border-[#2a3142] rounded-xl p-5">
+        {/* <div className="bg-[#1a1f2e] border border-[#2a3142] rounded-xl p-5">
           <div className="text-gray-400 text-sm mb-1">Win Chance</div>
           <div className="text-2xl font-bold text-[#22c55e]">
             {((myTickets.length / totalTickets) * 100).toFixed(2)}%
           </div>
           <div className="text-gray-500 text-sm">current odds</div>
-        </div>
+        </div> */}
         <div className="bg-[#1a1f2e] border border-[#2a3142] rounded-xl p-5">
           <div className="text-gray-400 text-sm mb-1">Total Tickets</div>
           <div className="text-2xl font-bold text-white">{formatNumber(totalTickets)}</div>
