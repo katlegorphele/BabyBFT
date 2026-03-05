@@ -44,6 +44,7 @@ export function Sweepstakev2() {
   const [isWithdrawing, setIsWithdrawing] = useState(false)
   const [error, setError] = useState(null)
   const [isWrongNetwork, setIsWrongNetwork] = useState(false)
+  const [isEndingRound, setIsEndingRound] = useState(false)
 
   // Contract Data State
   const [prizePool, setPrizePool] = useState('0')
@@ -54,9 +55,15 @@ export function Sweepstakev2() {
   const [claimableBalance, setClaimableBalance] = useState('0')
   const [isPaused, setIsPaused] = useState(false)
   const [recentWinners, setRecentWinners] = useState([])
-  const [userParticipated, setUserParticipated] = useState(false)
   const [needsApproval, setNeedsApproval] = useState(true)
   const [tokenBalance, setTokenBalance] = useState('0')
+
+  // V3 State
+  const [ticketCount, setTicketCount] = useState(1)
+  const [maxTickets, setMaxTickets] = useState(5)
+  const [userTickets, setUserTickets] = useState(0)
+  const [adminAddress, setAdminAddress] = useState('')
+  const [canEndRound, setCanEndRound] = useState(false)
 
   // Contract instances
   const [contract, setContract] = useState(null)
@@ -203,9 +210,12 @@ export function Sweepstakev2() {
         round,
         claimable,
         paused,
-        participants,
         balance,
-        allowance
+        allowance,
+        admin,
+        maxTicketsPerUser,
+        userTicketCount,
+        canDistribute
       ] = await Promise.all([
         contract.prizePool(),
         contract.entryFee(),
@@ -214,9 +224,12 @@ export function Sweepstakev2() {
         contract.roundId(),
         contract.claimableBalance(account),
         contract.paused(),
-        contract.getParticipants(),
         tokenContract.balanceOf(account),
-        tokenContract.allowance(account, activeDeployment.contractAddress)
+        tokenContract.allowance(account, activeDeployment.contractAddress),
+        contract.admin(),
+        contract.maxTicketsPerUser(),
+        contract.getUserTickets(account),
+        contract.canDistribute()
       ])
 
       setPrizePool(ethers.utils.formatEther(pool))
@@ -229,9 +242,13 @@ export function Sweepstakev2() {
       setTokenBalance(ethers.utils.formatEther(balance))
       setNeedsApproval(allowance.lt(fee))
 
-      // Check if user participated
-      const participantList = participants.map(p => p.toLowerCase())
-      setUserParticipated(participantList.includes(account.toLowerCase()))
+      // V3 State
+      setAdminAddress(admin)
+      setMaxTickets(maxTicketsPerUser.toNumber())
+      setUserTickets(userTicketCount.toNumber())
+      setCanEndRound(canDistribute)
+
+      // userTickets is now used to determine participation status
 
       // Fetch recent winners
       await loadRecentWinners(round.toNumber())
@@ -275,7 +292,7 @@ export function Sweepstakev2() {
     return () => clearInterval(timer)
   }, [timeRemaining, loadContractData])
 
-  // Join pool handler
+  // Join pool handler (V3: supports multiple tickets)
   const handleJoinPool = async () => {
     if (!contract || !tokenContract || isJoining || !hasDeployment) return
 
@@ -284,10 +301,11 @@ export function Sweepstakev2() {
 
     try {
       const feeAmount = await contract.entryFee()
+      const totalCost = feeAmount.mul(ticketCount)
 
-      // Check and handle approval
+      // Check and handle approval for total cost
       const currentAllowance = await tokenContract.allowance(account, activeDeployment.contractAddress)
-      if (currentAllowance.lt(feeAmount)) {
+      if (currentAllowance.lt(totalCost)) {
         const approveTx = await tokenContract.approve(
           activeDeployment.contractAddress,
           ethers.constants.MaxUint256
@@ -295,9 +313,12 @@ export function Sweepstakev2() {
         await approveTx.wait()
       }
 
-      // Join pool - contract only allows 1 entry per round per user
-      const tx = await contract.joinPool()
+      // Join pool with ticket count (V3)
+      const tx = await contract.joinPool(ticketCount)
       await tx.wait()
+
+      // Reset ticket count selector after successful entry
+      setTicketCount(1)
 
       // Reload data
       await loadContractData()
@@ -370,6 +391,28 @@ export function Sweepstakev2() {
       setIsWithdrawing(false)
     }
   }
+
+  // V3: End round handler (admin only)
+  const handleEndRound = async () => {
+    if (!contract || !isAdmin || isEndingRound) return
+
+    setIsEndingRound(true)
+    setError(null)
+
+    try {
+      const tx = await contract.requestWinner()
+      await tx.wait()
+      await loadContractData()
+    } catch (err) {
+      setError('Failed to end round: ' + (err.reason || err.message))
+      console.error(err)
+    } finally {
+      setIsEndingRound(false)
+    }
+  }
+
+  // Derived state
+  const isAdmin = account && adminAddress && account.toLowerCase() === adminAddress.toLowerCase()
 
   // Helper to convert seconds to hours/minutes/seconds
   const formatTimeLeft = (seconds) => {
@@ -597,10 +640,33 @@ export function Sweepstakev2() {
           <div className="flex items-center gap-2 text-green-200 text-sm mb-2">
             <span>🎟️</span> Enter Sweepstake
           </div>
+
+          {/* V3: Ticket Quantity Selector */}
+          {userTickets < maxTickets && (
+            <div className="flex items-center gap-2 mb-3">
+              <button
+                onClick={() => setTicketCount(Math.max(1, ticketCount - 1))}
+                disabled={ticketCount <= 1}
+                className="w-8 h-8 rounded bg-green-800 text-white font-bold hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                -
+              </button>
+              <span className="text-white font-bold text-xl w-8 text-center">{ticketCount}</span>
+              <button
+                onClick={() => setTicketCount(Math.min(maxTickets - userTickets, ticketCount + 1))}
+                disabled={ticketCount >= maxTickets - userTickets}
+                className="w-8 h-8 rounded bg-green-800 text-white font-bold hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                +
+              </button>
+              <span className="text-green-200 text-sm ml-2">ticket{ticketCount > 1 ? 's' : ''}</span>
+            </div>
+          )}
+
           <div className="flex items-center gap-3">
             <button
               onClick={handleJoinPool}
-              disabled={isJoining || isPaused || userParticipated || isWrongNetwork || !hasDeployment || parseFloat(tokenBalance) < parseFloat(entryFee)}
+              disabled={isJoining || isPaused || userTickets >= maxTickets || isWrongNetwork || !hasDeployment || parseFloat(tokenBalance) < parseFloat(entryFee) * ticketCount}
               className="flex-1 h-10 rounded-lg bg-white text-green-700 font-bold hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2"
             >
               {isJoining ? (
@@ -608,19 +674,20 @@ export function Sweepstakev2() {
                   <div className="w-4 h-4 border-2 border-green-700 border-t-transparent rounded-full animate-spin"></div>
                   Joining...
                 </>
-              ) : userParticipated ? (
-                'Already Entered'
+              ) : userTickets >= maxTickets ? (
+                'Max Tickets Reached'
               ) : needsApproval ? (
-                'Approve & Enter'
+                `Approve & Buy ${ticketCount} Ticket${ticketCount > 1 ? 's' : ''}`
               ) : (
-                'Enter Now'
+                `Buy ${ticketCount} Ticket${ticketCount > 1 ? 's' : ''}`
               )}
             </button>
           </div>
           <div className="text-green-200 text-sm mt-2">
-            Entry fee: {formatNumber(entryFee)} BBFT
+            Cost: {formatNumber(parseFloat(entryFee) * ticketCount)} BBFT
+            {userTickets > 0 && ` (${userTickets}/${maxTickets} tickets used)`}
           </div>
-          {parseFloat(tokenBalance) < parseFloat(entryFee) && !userParticipated && (
+          {parseFloat(tokenBalance) < parseFloat(entryFee) * ticketCount && userTickets < maxTickets && (
             <div className="text-red-300 text-xs mt-1">
               Insufficient balance (You have {formatNumber(tokenBalance)} BBFT)
             </div>
@@ -651,13 +718,48 @@ export function Sweepstakev2() {
         </div>
       </div>
 
+      {/* V3: Admin Controls - End Round Button */}
+      {isAdmin && (
+        <div className="bg-[#7c2d12] border border-[#f97316]/30 rounded-xl p-5">
+          <div className="flex items-center gap-2 text-orange-200 text-sm mb-2">
+            <span>👑</span> Admin Controls
+          </div>
+          <button
+            onClick={handleEndRound}
+            disabled={!canEndRound || isEndingRound || isPaused}
+            className="w-full h-10 rounded-lg bg-orange-500 text-black font-bold hover:bg-orange-400 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2"
+          >
+            {isEndingRound ? (
+              <>
+                <div className="w-4 h-4 border-2 border-black border-t-transparent rounded-full animate-spin"></div>
+                Ending Round...
+              </>
+            ) : canEndRound ? (
+              'End Round & Pick Winners'
+            ) : (
+              'Round Not Ready'
+            )}
+          </button>
+          {!canEndRound && timeRemaining > 0 && (
+            <p className="text-orange-300 text-xs mt-2 text-center">
+              Wait for timer to end and at least 1 participant
+            </p>
+          )}
+          {!canEndRound && timeRemaining === 0 && participantCount === 0 && (
+            <p className="text-orange-300 text-xs mt-2 text-center">
+              Need at least 1 participant to end the round
+            </p>
+          )}
+        </div>
+      )}
+
       {/* User Stats Row */}
       <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
         <div className="bg-[#1a1f2e] border border-[#2a3142] rounded-xl p-5">
           <div className="text-gray-400 text-sm mb-1">Your Status</div>
           <div className="text-2xl font-bold text-white">
-            {userParticipated ? (
-              <span className="text-[#22c55e]">Entered</span>
+            {userTickets > 0 ? (
+              <span className="text-[#22c55e]">{userTickets} Ticket{userTickets > 1 ? 's' : ''}</span>
             ) : (
               <span className="text-gray-500">Not Entered</span>
             )}
@@ -687,18 +789,26 @@ export function Sweepstakev2() {
             <span className="text-gray-400 text-sm">Round #{roundId}</span>
           </div>
 
-          {userParticipated ? (
+          {userTickets > 0 ? (
             <div className="bg-[#22c55e]/20 rounded-lg p-4 text-center">
-              <div className="text-[#22c55e] font-bold text-lg mb-1">✓ Entered!</div>
+              <div className="text-[#22c55e] font-bold text-lg mb-1">
+                ✓ {userTickets} Ticket{userTickets > 1 ? 's' : ''}
+              </div>
               <p className="text-gray-400 text-sm">You're in this round's draw</p>
               <p className="text-gray-500 text-xs mt-2">
-                Entry fee paid: {formatNumber(entryFee)} BBFT
+                Total cost: {formatNumber(parseFloat(entryFee) * userTickets)} BBFT
               </p>
+              {userTickets < maxTickets && (
+                <p className="text-green-400 text-xs mt-1">
+                  You can buy {maxTickets - userTickets} more ticket{maxTickets - userTickets > 1 ? 's' : ''}
+                </p>
+              )}
             </div>
           ) : (
             <div className="text-center py-8 text-gray-500">
               <p>You haven't entered this round yet</p>
-              <p className="text-sm mt-2">Entry fee: {formatNumber(entryFee)} BBFT</p>
+              <p className="text-sm mt-2">Entry fee: {formatNumber(entryFee)} BBFT per ticket</p>
+              <p className="text-xs mt-1">Max {maxTickets} tickets per round</p>
             </div>
           )}
         </div>

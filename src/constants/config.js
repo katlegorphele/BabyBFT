@@ -82,7 +82,8 @@ export const SPIN_GAME_ABI = [
 ];
 
 export const SWEEPSTAKE_ABI = [
-  "function joinPool() external",
+  // V3: Updated joinPool with numTickets parameter
+  "function joinPool(uint256 numTickets) external",
   "function requestWinner() external",
   "function withdrawPrize() external",
   "function canDistribute() external view returns (bool)",
@@ -98,6 +99,9 @@ export const SWEEPSTAKE_ABI = [
   "function paused() external view returns (bool)",
   "function version() external view returns (string)",
   "function admin() external view returns (address)",
+  // V3: New functions
+  "function getUserTickets(address) external view returns (uint256)",
+  "function maxTicketsPerUser() external view returns (uint256)",
 ];
 
 export const TOKEN_ABI = [
