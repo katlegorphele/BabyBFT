@@ -6,6 +6,52 @@ export const WALLETCONNECT_PROJECT_ID = import.meta.env.VITE_WALLETCONNECT_PROJE
 export const BSC_CHAIN_ID = 56;
 export const BSC_RPC_URL = "https://bsc-dataseed.binance.org/";
 
+// BSC Testnet Configuration (for Sweepstake)
+export const BSC_TESTNET_CHAIN_ID = 97;
+export const BSC_TESTNET_RPC_URL = "https://data-seed-prebsc-1-s1.binance.org:8545/";
+export const SWEEPSTAKE_CONTRACT_ADDRESS = "0x7658008b09b91Cd67D7571471580d5056Bd57bd9";
+export const SWEEPSTAKE_TOKEN_ADDRESS = "0xEd611a47eD426e26030e1b2780Bb6675576A51b7";
+
+export const NETWORK_KEYS = {
+  MAINNET: "mainnet",
+  TESTNET: "testnet",
+};
+
+export const DEFAULT_NETWORK_KEY = NETWORK_KEYS.MAINNET;
+export const LAST_NETWORK_KEY = "bbft_last_network";
+
+export const NETWORK_CONFIGS = {
+  [NETWORK_KEYS.MAINNET]: {
+    key: NETWORK_KEYS.MAINNET,
+    chainId: BSC_CHAIN_ID,
+    chainName: "BNB Smart Chain",
+    nativeCurrency: { name: "BNB", symbol: "BNB", decimals: 18 },
+    rpcUrl: BSC_RPC_URL,
+    blockExplorerUrl: "https://bscscan.com",
+    shortLabel: "Mainnet",
+  },
+  [NETWORK_KEYS.TESTNET]: {
+    key: NETWORK_KEYS.TESTNET,
+    chainId: BSC_TESTNET_CHAIN_ID,
+    chainName: "BNB Smart Chain Testnet",
+    nativeCurrency: { name: "tBNB", symbol: "tBNB", decimals: 18 },
+    rpcUrl: BSC_TESTNET_RPC_URL,
+    blockExplorerUrl: "https://testnet.bscscan.com",
+    shortLabel: "Testnet",
+  },
+};
+
+export const SWEEPSTAKE_DEPLOYMENTS = {
+  [NETWORK_KEYS.MAINNET]: {
+    contractAddress: import.meta.env.VITE_SWEEPSTAKE_MAINNET_CONTRACT_ADDRESS || "",
+    tokenAddress: import.meta.env.VITE_SWEEPSTAKE_MAINNET_TOKEN_ADDRESS || "",
+  },
+  [NETWORK_KEYS.TESTNET]: {
+    contractAddress: SWEEPSTAKE_CONTRACT_ADDRESS,
+    tokenAddress: SWEEPSTAKE_TOKEN_ADDRESS,
+  },
+};
+
 // URLs
 export const BUY_TOKEN_URL = `https://pancakeswap.finance/swap?inputCurrency=${TOKEN_ADDRESS}`;
 export const SELL_TOKEN_URL = `https://pancakeswap.finance/swap?inputCurrency=${TOKEN_ADDRESS}`;
@@ -35,10 +81,32 @@ export const SPIN_GAME_ABI = [
   "event SpinCompleted(address indexed player, uint256 indexed spinId, uint256 tierIndex, uint256 prizeAmount, uint256 feeAmount, uint256 timestamp, uint256 randomSeed)"
 ];
 
+export const SWEEPSTAKE_ABI = [
+  "function joinPool() external",
+  "function requestWinner() external",
+  "function withdrawPrize() external",
+  "function canDistribute() external view returns (bool)",
+  "function roundId() external view returns (uint256)",
+  "function getParticipantCount() external view returns (uint256)",
+  "function getParticipants() external view returns (address[])",
+  "function getRoundTimeRemaining() external view returns (uint256)",
+  "function claimableBalance(address) external view returns (uint256)",
+  "function getRoundWinners(uint256) external view returns (address[])",
+  "function getRoundResult(uint256) external view returns (address[], uint256, uint256, uint256, uint256)",
+  "function prizePool() external view returns (uint256)",
+  "function entryFee() external view returns (uint256)",
+  "function paused() external view returns (bool)",
+  "function version() external view returns (string)",
+  "function admin() external view returns (address)",
+];
+
 export const TOKEN_ABI = [
-  "function balanceOf(address account) external view returns (uint256)",
+  "function mint(address to, uint256 amount) external",
   "function approve(address spender, uint256 amount) external returns (bool)",
-  "function allowance(address owner, address spender) external view returns (uint256)"
+  "function balanceOf(address account) external view returns (uint256)",
+  "function allowance(address owner, address spender) external view returns (uint256)",
+  "function symbol() external view returns (string)",
+  "function decimals() external view returns (uint8)",
 ];
 
 // UI Constants

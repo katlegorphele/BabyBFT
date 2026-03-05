@@ -2,7 +2,6 @@ import React, { useState } from 'react';
 import { WalletProvider } from './context/WalletContext';
 import Header from './components/Header';
 import TabNavigation from './components/TabNavigation';
-import SweepstakeGame from './games/SweepstakeGame';
 import Sweepstakev2 from './games/Sweepstake_game';
 
 // Import the legacy spin game (current App.jsx)
