@@ -101,7 +101,8 @@ export const SWEEPSTAKE_ABI = [
 ];
 
 export const TOKEN_ABI = [
-  "function mint(address to, uint256 amount) external",
+  "function mint(uint256 value) external",
+  "function burnToken(uint256 valToBurn) external",
   "function approve(address spender, uint256 amount) external returns (bool)",
   "function balanceOf(address account) external view returns (uint256)",
   "function allowance(address owner, address spender) external view returns (uint256)",

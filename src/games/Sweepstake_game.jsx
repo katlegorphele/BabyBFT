@@ -16,12 +16,14 @@
 
 import { useState, useEffect, useCallback } from "react"
 import { ethers } from "ethers"
+import { ExternalLink } from "lucide-react"
 import { useWallet } from "../context/WalletContext"
 import {
   SWEEPSTAKE_ABI,
   TOKEN_ABI,
   NETWORK_KEYS,
-  SWEEPSTAKE_DEPLOYMENTS
+  SWEEPSTAKE_DEPLOYMENTS,
+  TOKEN_ADDRESS
 } from "../constants/config"
 import { formatNumber, formatAddress, getTimeSince } from "../utils/formatters"
 
@@ -60,10 +62,22 @@ export function Sweepstakev2() {
   const [contract, setContract] = useState(null)
   const [tokenContract, setTokenContract] = useState(null)
   const [isSwitchingNetwork, setIsSwitchingNetwork] = useState(false)
+  const [isMintingTokens, setIsMintingTokens] = useState(false)
+  const [isBurningTokens, setIsBurningTokens] = useState(false)
 
   const activeDeployment = SWEEPSTAKE_DEPLOYMENTS[selectedNetwork]
   const hasDeployment = Boolean(activeDeployment?.contractAddress && activeDeployment?.tokenAddress)
   const isMainnet = selectedNetwork === NETWORK_KEYS.MAINNET
+  const swapTokenAddress = selectedNetwork === NETWORK_KEYS.TESTNET
+    ? SWEEPSTAKE_DEPLOYMENTS[NETWORK_KEYS.TESTNET].tokenAddress
+    : TOKEN_ADDRESS
+  const swapBaseUrl = selectedNetwork === NETWORK_KEYS.TESTNET
+    ? 'https://pancakeswap.finance/swap?chain=bscTestnet'
+    : 'https://pancakeswap.finance/swap'
+  const swapUrlSeparator = swapBaseUrl.includes('?') ? '&' : '?'
+  const buyTokenUrl = `${swapBaseUrl}${swapUrlSeparator}inputCurrency=${swapTokenAddress}`
+  const sellTokenUrl = `${swapBaseUrl}${swapUrlSeparator}inputCurrency=${swapTokenAddress}`
+  const TESTNET_TOKEN_ACTION_AMOUNT = "10000"
 
   const handleNetworkSwitch = async () => {
     setError(null)
@@ -296,6 +310,46 @@ export function Sweepstakev2() {
     }
   }
 
+  const handleMintTestTokens = async () => {
+    if (selectedNetwork !== NETWORK_KEYS.TESTNET || !tokenContract || !account || isWrongNetwork) return
+
+    setError(null)
+    setIsMintingTokens(true)
+    try {
+      // Contract's mint(value) multiplies by 10**18 internally, so pass raw amount
+      const tx = await tokenContract.mint(TESTNET_TOKEN_ACTION_AMOUNT)
+      await tx.wait()
+      await loadContractData()
+    } catch (err) {
+      setError('Failed to mint test tokens: ' + (err.reason || err.message))
+    } finally {
+      setIsMintingTokens(false)
+    }
+  }
+
+  const handleBurnTestTokens = async () => {
+    if (selectedNetwork !== NETWORK_KEYS.TESTNET || !tokenContract || isWrongNetwork) return
+
+    setError(null)
+    setIsBurningTokens(true)
+    try {
+      // burnToken() expects amount in wei (with 18 decimals)
+      const burnAmount = ethers.utils.parseEther(TESTNET_TOKEN_ACTION_AMOUNT)
+
+      if (parseFloat(tokenBalance) < parseFloat(TESTNET_TOKEN_ACTION_AMOUNT)) {
+        throw new Error(`Need at least ${TESTNET_TOKEN_ACTION_AMOUNT} BBFT to burn`)
+      }
+
+      const tx = await tokenContract.burnToken(burnAmount)
+      await tx.wait()
+      await loadContractData()
+    } catch (err) {
+      setError('Failed to burn test tokens: ' + (err.reason || err.message))
+    } finally {
+      setIsBurningTokens(false)
+    }
+  }
+
   // Withdraw prize handler
   const handleWithdrawPrize = async () => {
     if (!contract || isWithdrawing || parseFloat(claimableBalance) === 0) return
@@ -454,19 +508,89 @@ export function Sweepstakev2() {
         </div>
       )}
 
-      {/* Top Stats Row - Prize Pool, Buy, Countdown */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      {/* Pool + Token Actions */}
+      <div className="bg-[#0f1219] border border-[#1f2937] rounded-xl p-4">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         {/* Prize Pool Card */}
-        <div className="bg-[#1a1f2e] border border-[#2a3142] rounded-xl p-5">
-          <div className="flex items-center gap-2 text-gray-400 text-sm mb-2">
-            <span>🏆</span> Prize Pool
+          <div className="bg-[#1a1f2e] border border-[#2a3142] rounded-xl p-5">
+            <div className="flex items-center gap-2 text-gray-400 text-sm mb-2">
+              <span>🏆</span> Prize Pool
+            </div>
+            <div className="text-3xl font-bold text-white mb-1">{formatNumber(prizePool)}</div>
+            <div className="flex items-center justify-between">
+              <span className="text-gray-500 text-sm">BBFT available</span>
+              <span className="text-gray-400 text-sm">${formatNumber(usdValue)} USD</span>
+            </div>
           </div>
-          <div className="text-3xl font-bold text-white mb-1">{formatNumber(prizePool)}</div>
-          <div className="flex items-center justify-between">
-            <span className="text-gray-500 text-sm">BBFT available</span>
-            <span className="text-gray-400 text-sm">${formatNumber(usdValue)} USD</span>
-          </div>
+
+          {selectedNetwork === NETWORK_KEYS.TESTNET ? (
+            <button
+              onClick={handleMintTestTokens}
+              disabled={isMintingTokens || isWrongNetwork || !tokenContract}
+              className="text-left bg-gradient-to-r from-green-900 to-green-800 rounded-xl p-5 border border-green-700 hover:from-green-800 hover:to-green-700 transition group disabled:opacity-60 disabled:cursor-not-allowed"
+            >
+              <p className="text-green-300 text-sm mb-1">💰 Buy BBFT</p>
+              <p className="text-xl font-bold flex items-center gap-2">
+                {isMintingTokens ? 'Minting...' : 'Mint Tokens'}
+              </p>
+              <p className="text-green-300 text-xs mt-1">
+                Mint {formatNumber(TESTNET_TOKEN_ACTION_AMOUNT)} test BBFT
+              </p>
+            </button>
+          ) : (
+            <a
+              href={buyTokenUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="bg-gradient-to-r from-green-900 to-green-800 rounded-xl p-5 border border-green-700 hover:from-green-800 hover:to-green-700 transition group"
+            >
+              <p className="text-green-300 text-sm mb-1">💰 Buy BBFT</p>
+              <p className="text-xl font-bold flex items-center gap-2">
+                Buy Tokens
+                <ExternalLink className="w-4 h-4 group-hover:translate-x-1 transition" />
+              </p>
+              <p className="text-green-300 text-xs mt-1">
+                Get BBFT on PancakeSwap
+              </p>
+            </a>
+          )}
+
+          {selectedNetwork === NETWORK_KEYS.TESTNET ? (
+            <button
+              onClick={handleBurnTestTokens}
+              disabled={isBurningTokens || isWrongNetwork || !tokenContract || parseFloat(tokenBalance) < parseFloat(TESTNET_TOKEN_ACTION_AMOUNT)}
+              className="text-left bg-gradient-to-r from-red-900 to-red-800 rounded-xl p-5 border border-red-700 hover:from-red-800 hover:to-red-700 transition group disabled:opacity-60 disabled:cursor-not-allowed"
+            >
+              <p className="text-red-300 text-sm mb-1">💸 Sell BBFT</p>
+              <p className="text-xl font-bold flex items-center gap-2">
+                {isBurningTokens ? 'Burning...' : 'Burn Tokens'}
+              </p>
+              <p className="text-red-300 text-xs mt-1">
+                Burn {formatNumber(TESTNET_TOKEN_ACTION_AMOUNT)} test BBFT
+              </p>
+            </button>
+          ) : (
+            <a
+              href={sellTokenUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="bg-gradient-to-r from-red-900 to-red-800 rounded-xl p-5 border border-red-700 hover:from-red-800 hover:to-red-700 transition group"
+            >
+              <p className="text-red-300 text-sm mb-1">💸 Sell BBFT</p>
+              <p className="text-xl font-bold flex items-center gap-2">
+                Sell Tokens
+                <ExternalLink className="w-4 h-4 group-hover:translate-x-1 transition" />
+              </p>
+              <p className="text-red-300 text-xs mt-1">
+                Swap BBFT on PancakeSwap
+              </p>
+            </a>
+          )}
         </div>
+      </div>
+
+      {/* Game Controls */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
 
         {/* Buy Tickets Card */}
         <div className="bg-[#166534] border border-[#22c55e]/30 rounded-xl p-5">
